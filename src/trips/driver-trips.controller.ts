@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '../auth/jwt-auth.guard.js';
 import type { AuthUser } from '../auth/token.service.js';
 import { ResponseMessage } from '../common/decorators/response-message.decorator.js';
@@ -7,6 +7,7 @@ import { Role } from '../users/role.enum.js';
 import { DriverTripsService } from './driver-trips.service.js';
 import { NearbyQuery } from './dto/nearby.query.js';
 import type { TripRequestResponse } from './trip-request-view.js';
+import type { TripResponse } from './trip-view.js';
 
 /**
  * Driver-only trip actions. Registered before TripsController so that
@@ -25,5 +26,13 @@ export class DriverTripsController {
     @Query() position: NearbyQuery,
   ): Promise<TripRequestResponse[]> {
     return this.driverTrips.listRequests(caller, position);
+  }
+
+  /** operationId: acceptTrip */
+  @Post(':tripId/accept')
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Trip accepted successfully')
+  acceptTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
+    return this.driverTrips.accept(caller, tripId);
   }
 }

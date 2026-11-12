@@ -48,6 +48,9 @@ export interface TripResponse {
   cancelledAt: string | null;
 }
 
+/** The relations toTripView() needs loaded. */
+export const WITH_PEOPLE = { passenger: true, driver: { driverDetails: true } } as const;
+
 export interface TripViewer {
   id: string;
   role: Role;

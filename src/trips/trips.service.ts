@@ -6,8 +6,9 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { isUUID } from 'class-validator';
-import { In, QueryFailedError, Repository, type FindOptionsWhere } from 'typeorm';
+import { In, Repository, type FindOptionsWhere } from 'typeorm';
 import type { AuthUser } from '../auth/token.service.js';
+import { violatesConstraint } from '../common/errors/violates-constraint.js';
 import { StorageService } from '../storage/storage.service.js';
 import { Role } from '../users/role.enum.js';
 import type { CancelTripDto } from './dto/cancel-trip.dto.js';
@@ -16,7 +17,7 @@ import type { ListTripsQuery } from './dto/list-trips.query.js';
 import { Trip } from './entities/trip.entity.js';
 import { FIXED_FARE, isWithinServiceArea } from './pricing.js';
 import { ACTIVE_STATUSES, CancelReason, TripStatus } from './trip.enums.js';
-import { toTripView, type TripResponse } from './trip-view.js';
+import { toTripView, WITH_PEOPLE, type TripResponse } from './trip-view.js';
 
 export const ALREADY_ACTIVE = 'You already have an active trip';
 export const OUTSIDE_SERVICE_AREA = 'Pickup or destination is outside the Antigonish service area';
@@ -38,9 +39,6 @@ export interface TripPage {
   size: number;
   totalItems: number;
 }
-
-/** Everything toTripView() needs. */
-const WITH_PEOPLE = { passenger: true, driver: { driverDetails: true } } as const;
 
 @Injectable()
 export class TripsService {
@@ -76,7 +74,7 @@ export class TripsService {
     } catch (error) {
       // Two bookings at the same moment both pass the check above; the
       // partial unique index lets only one of them in.
-      if (violates(error, 'UQ_trips_passenger_active')) {
+      if (violatesConstraint(error, 'UQ_trips_passenger_active')) {
         throw new ConflictException(ALREADY_ACTIVE);
       }
       throw error;
@@ -180,11 +178,4 @@ export class TripsService {
   private view(trip: Trip, caller: AuthUser): TripResponse {
     return toTripView(trip, caller, (key) => this.storage.signedPhotoUrl(key));
   }
-}
-
-function violates(error: unknown, constraint: string): boolean {
-  return (
-    error instanceof QueryFailedError &&
-    (error.driverError as { constraint?: string } | undefined)?.constraint === constraint
-  );
 }

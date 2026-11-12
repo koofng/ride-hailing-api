@@ -193,3 +193,172 @@ describe('GET /api/trips/requests', () => {
     await ctx.http().get(`/api/trips/requests${DRIVER_AT_TOWN_CENTRE}`).expect(401);
   });
 });
+
+// ------------------------------------------------------------------ acceptTrip
+describe('POST /api/trips/:tripId/accept', () => {
+  const accept = (token: string, id: string) =>
+    ctx.http().post(`/api/trips/${id}/accept`).set(bearer(token));
+
+  const conflict = (message: string) => ({
+    success: false,
+    message,
+    error: { statusCode: 409, status: 'Conflict' },
+  });
+
+  it('200: the Driver takes the trip and sees the full Passenger details', async () => {
+    const driver = await signUpDriver(ctx);
+    const { passenger, tripId } = await book();
+
+    const res = await accept(driver.token, tripId).expect(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      message: 'Trip accepted successfully',
+      data: {
+        id: tripId,
+        status: 'ACCEPTED',
+        acceptedAt: expect.any(String),
+        passenger: { id: passenger.user.id, fullName: 'Jane Doe', phone: passenger.user.phone },
+        driver: { id: driver.user.id },
+        destination: ST_FX,
+      },
+    });
+  });
+
+  it('the Passenger now sees the Driver and vehicle on their active trip', async () => {
+    const driver = await signUpDriver(ctx);
+    const { passenger, tripId } = await book();
+    await accept(driver.token, tripId).expect(200);
+
+    const { body } = await ctx.http().get('/api/trips/active').set(bearer(passenger.token)).expect(200);
+    expect(body.data).toMatchObject({ id: tripId, status: 'ACCEPTED' });
+    expect(body.data.driver).toMatchObject({
+      id: driver.user.id,
+      fullName: 'John Smith',
+      vehicle: { make: 'Toyota', model: 'Corolla', colour: 'Silver' },
+    });
+  });
+
+  it('the trip becomes the Driver’s active trip and leaves everyone’s request list', async () => {
+    const driver = await signUpDriver(ctx);
+    const other = await signUpDriver(ctx);
+    const { tripId } = await book();
+    await accept(driver.token, tripId).expect(200);
+
+    const active = await ctx.http().get('/api/trips/active').set(bearer(driver.token)).expect(200);
+    expect(active.body.data.id).toBe(tripId);
+    const list = await ctx
+      .http()
+      .get(`/api/trips/requests${DRIVER_AT_TOWN_CENTRE}`)
+      .set(bearer(other.token))
+      .expect(200);
+    expect(list.body.data).toEqual([]);
+  });
+
+  it('the Passenger can no longer cancel once accepted', async () => {
+    const driver = await signUpDriver(ctx);
+    const { passenger, tripId } = await book();
+    await accept(driver.token, tripId).expect(200);
+    await ctx
+      .http()
+      .post(`/api/trips/${tripId}/cancel`)
+      .set(bearer(passenger.token))
+      .send({ reason: 'CHANGED_MIND' })
+      .expect(409);
+  });
+
+  describe('409: no longer available', () => {
+    it('another Driver accepted it first', async () => {
+      const first = await signUpDriver(ctx);
+      const second = await signUpDriver(ctx);
+      const { tripId } = await book();
+      await accept(first.token, tripId).expect(200);
+
+      const res = await accept(second.token, tripId).expect(409);
+      expect(res.body).toEqual(conflict('This trip is no longer available'));
+    });
+
+    it('the Passenger cancelled', async () => {
+      const driver = await signUpDriver(ctx);
+      const { passenger, tripId } = await book();
+      await ctx
+        .http()
+        .post(`/api/trips/${tripId}/cancel`)
+        .set(bearer(passenger.token))
+        .send({ reason: 'CHANGED_MIND' })
+        .expect(200);
+      expect((await accept(driver.token, tripId).expect(409)).body.message).toBe('This trip is no longer available');
+    });
+
+    it('the request expired, even before the sweep cancelled it', async () => {
+      const driver = await signUpDriver(ctx);
+      const { tripId } = await book();
+      await backdate(tripId, 121);
+      await accept(driver.token, tripId).expect(409);
+      const [row] = await ctx.db.query('SELECT status, driver_id FROM trips');
+      expect(row).toEqual({ status: 'REQUESTED', driver_id: null });
+    });
+  });
+
+  it('409: the Driver already has an active trip', async () => {
+    const driver = await signUpDriver(ctx);
+    const current = await book();
+    const next = await book(ST_FX);
+    await accept(driver.token, current.tripId).expect(200);
+
+    const res = await accept(driver.token, next.tripId).expect(409);
+    expect(res.body).toEqual(conflict('Complete your current trip before accepting a new one'));
+    const [row] = await ctx.db.query('SELECT status FROM trips WHERE id = $1', [next.tripId]);
+    expect(row.status).toBe('REQUESTED');
+  });
+
+  it('a Driver can accept again once their trip is completed', async () => {
+    const driver = await signUpDriver(ctx);
+    const current = await book();
+    const next = await book(ST_FX);
+    await accept(driver.token, current.tripId).expect(200);
+    await setTrip(current.tripId, `status = 'COMPLETED', completed_at = now()`);
+    await accept(driver.token, next.tripId).expect(200);
+  });
+
+  it('several Drivers accepting at once: exactly one wins', async () => {
+    const drivers = await Promise.all([1, 2, 3, 4].map(() => signUpDriver(ctx)));
+    const { tripId } = await book();
+
+    const results = await Promise.all(drivers.map((d) => accept(d.token, tripId)));
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409, 409, 409]);
+    const winner = drivers[results.findIndex((r) => r.status === 200)];
+    const [row] = await ctx.db.query('SELECT driver_id FROM trips WHERE id = $1', [tripId]);
+    expect(row.driver_id).toBe(winner.user.id);
+  });
+
+  it('one Driver accepting two trips at once ends up with only one', async () => {
+    const driver = await signUpDriver(ctx);
+    const a = await book();
+    const b = await book(ST_FX);
+
+    const results = await Promise.all([accept(driver.token, a.tripId), accept(driver.token, b.tripId)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+    const [{ count }] = await ctx.db.query(
+      `SELECT count(*)::int AS count FROM trips WHERE driver_id = $1`,
+      [driver.user.id],
+    );
+    expect(count).toBe(1);
+  });
+
+  it.each(['3f6c1b2a-8d4e-4f0a-9b1c-2e7d5a9c4f11', 'not-a-uuid'])('404: unknown or malformed id %s', async (id) => {
+    const driver = await signUpDriver(ctx);
+    const res = await accept(driver.token, id).expect(404);
+    expect(res.body.message).toBe('Trip not found');
+  });
+
+  it('403: a Passenger cannot accept a trip', async () => {
+    const { passenger, tripId } = await book();
+    const res = await accept(passenger.token, tripId).expect(403);
+    expect(res.body).toEqual(FORBIDDEN);
+  });
+
+  it('401: no token', async () => {
+    const { tripId } = await book();
+    await ctx.http().post(`/api/trips/${tripId}/accept`).expect(401);
+  });
+});
