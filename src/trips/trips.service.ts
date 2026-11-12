@@ -17,6 +17,7 @@ import type { ListTripsQuery } from './dto/list-trips.query.js';
 import { Trip } from './entities/trip.entity.js';
 import { FaresService } from '../fares/fares.service.js';
 import { ACTIVE_STATUSES, CancelReason, TripStatus } from './trip.enums.js';
+import { TripEvents } from './trip-events.js';
 import { toTripView, WITH_PEOPLE, type TripResponse } from './trip-view.js';
 
 export const ALREADY_ACTIVE = 'You already have an active trip';
@@ -46,6 +47,7 @@ export class TripsService {
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
     private readonly storage: StorageService,
     private readonly fares: FaresService,
+    private readonly events: TripEvents,
   ) {}
 
   async create(caller: AuthUser, dto: CreateTripDto): Promise<TripResponse> {
@@ -81,6 +83,7 @@ export class TripsService {
       }
       throw error;
     }
+    this.events.publish({ type: 'requested', tripId: id, passengerId: caller.id });
     return this.view(await this.load(id), caller);
   }
 
@@ -161,6 +164,7 @@ export class TripsService {
       if (!trip) throw new NotFoundException(TRIP_NOT_FOUND);
       throw new ConflictException(CANNOT_CANCEL[trip.status]);
     }
+    this.events.publish({ type: 'cancelled', tripId, passengerId: caller.id });
     return this.view(await this.load(tripId), caller);
   }
 

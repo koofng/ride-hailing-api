@@ -10,6 +10,7 @@ import { TripDecline } from './entities/trip-decline.entity.js';
 import { Trip } from './entities/trip.entity.js';
 import type { Point } from '../fares/pricing.js';
 import { ACTIVE_STATUSES, TripStatus } from './trip.enums.js';
+import { TripEvents } from './trip-events.js';
 import { TripExpiryService } from './trip-expiry.service.js';
 import { toTripRequest, type TripRequestResponse } from './trip-request-view.js';
 import { toTripView, WITH_PEOPLE, type TripResponse } from './trip-view.js';
@@ -36,6 +37,7 @@ export class DriverTripsService {
     private readonly expiry: TripExpiryService,
     private readonly storage: StorageService,
     private readonly drivers: DriversService,
+    private readonly events: TripEvents,
   ) {}
 
   /**
@@ -91,7 +93,9 @@ export class DriverTripsService {
       }
       throw new ConflictException(NO_LONGER_AVAILABLE);
     }
-    return this.view(tripId, caller);
+    const trip = await this.load(tripId);
+    this.events.publish({ type: 'accepted', tripId, passengerId: trip.passengerId, driverId: caller.id });
+    return this.view(trip, caller);
   }
 
   /**
@@ -144,7 +148,7 @@ export class DriverTripsService {
     caller: AuthUser,
     tripId: string,
     from: TripStatus,
-    to: TripStatus,
+    to: TripStatus.DRIVER_ARRIVED | TripStatus.IN_PROGRESS | TripStatus.COMPLETED,
     stamp: 'arrivedAt' | 'startedAt' | 'completedAt',
   ): Promise<TripResponse> {
     if (!isUUID(tripId)) throw new NotFoundException(TRIP_NOT_FOUND);
@@ -166,11 +170,22 @@ export class DriverTripsService {
       }
       throw new ConflictException(INVALID_TRANSITION);
     }
-    return this.view(tripId, caller);
+    const trip = await this.load(tripId);
+    this.events.publish({
+      type: 'progressed',
+      tripId,
+      passengerId: trip.passengerId,
+      driverId: caller.id,
+      status: to,
+    });
+    return this.view(trip, caller);
   }
 
-  private async view(tripId: string, caller: AuthUser): Promise<TripResponse> {
-    const trip = await this.trips.findOneOrFail({ where: { id: tripId }, relations: WITH_PEOPLE });
+  private load(tripId: string): Promise<Trip> {
+    return this.trips.findOneOrFail({ where: { id: tripId }, relations: WITH_PEOPLE });
+  }
+
+  private view(trip: Trip, caller: AuthUser): TripResponse {
     return toTripView(trip, caller, (key) => this.storage.signedPhotoUrl(key));
   }
 

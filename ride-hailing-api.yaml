@@ -40,6 +40,20 @@ info:
     produce models for them. Connect with the same JWT used for REST
     (Socket.IO for NestJS, or STOMP over WebSocket for Spring Boot).
 
+    **Connecting (NestJS server):** Socket.IO v4 on the same host and port as the REST API,
+    without the `/api` prefix (path `/socket.io`). Send the access token as `auth: { token }`
+    (or an `Authorization: Bearer` header). Missing, invalid, expired or logged-out tokens are
+    refused with `connect_error` "Missing or expired access token". Logging out closes that
+    token's connections, and a connection closes when its token expires. Errors in messages the
+    client sends arrive as an `exception` event in the usual error envelope.
+
+    **Rules:** `trip:request` goes to Drivers who are online and not on a trip, with `distanceKm`
+    from each Driver's last position. `trip:withdrawn` goes to connected Drivers (one who never
+    saw the request ignores the unknown `tripId`), except the Driver who accepted. `driver:location`
+    from the Driver is acknowledged with `{ accepted }`; more than one per second is ignored.
+    ETAs assume 30 km/h. Events are best effort: on (re)connecting, clients should re-fetch
+    `GET /trips/active` (and Drivers `GET /trips/requests`), which are always up to date.
+
     | Direction          | Event             | Payload schema              |
     |--------------------|-------------------|-----------------------------|
     | Driver -> Server   | `driver:location` | `DriverLocationUpdate`      |
@@ -1731,7 +1745,8 @@ components:
           $ref: '#/components/schemas/DriverSummary'
         etaSeconds:
           type: integer
-          description: Estimated time for the Driver to reach the pickup
+          nullable: true
+          description: Estimated time for the Driver to reach the pickup; null if the Driver's position is not known yet
 
     DriverLocationEvent:
       type: object
@@ -1747,6 +1762,10 @@ components:
         lng:
           type: number
           format: double
+        heading:
+          type: number
+          format: double
+          description: The Driver's direction of travel in degrees, when the Driver app sent one
         etaSeconds:
           type: integer
           description: Seconds to the pickup (before the trip starts) or to the destination (during the trip)

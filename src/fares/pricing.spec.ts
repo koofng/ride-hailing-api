@@ -1,4 +1,4 @@
-import { distanceKm, isWithinServiceArea, SERVICE_AREA } from './pricing.js';
+import { distanceKm, etaSeconds, isWithinServiceArea, SERVICE_AREA } from './pricing.js';
 
 describe('distanceKm', () => {
   it('is zero for the same point', () => {
@@ -25,5 +25,16 @@ describe('isWithinServiceArea', () => {
     ['Halifax', { lat: 44.6488, lng: -63.5752 }],
   ])('rejects %s', (_label, point) => {
     expect(isWithinServiceArea(point)).toBe(false);
+  });
+});
+
+describe('etaSeconds', () => {
+  it.each([
+    [0, 0],
+    [1, 120],
+    [2.5, 300],
+    [0.4, 48],
+  ])('%s km at 30 km/h -> %s s', (km, seconds) => {
+    expect(etaSeconds(km)).toBe(seconds);
   });
 });

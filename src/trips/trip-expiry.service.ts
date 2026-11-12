@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import type { AppEnv } from '../config/env.validation.js';
 import { Trip } from './entities/trip.entity.js';
 import { CancelReason, TripStatus } from './trip.enums.js';
+import { TripEvents } from './trip-events.js';
 
 /**
  * Trip requests are open to Drivers for TRIP_REQUEST_TTL_SECONDS. A trip no
@@ -24,6 +25,7 @@ export class TripExpiryService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
     config: ConfigService<AppEnv, true>,
+    private readonly events: TripEvents,
   ) {
     this.ttlSeconds = config.get('TRIP_REQUEST_TTL_SECONDS', { infer: true });
     this.sweepSeconds = config.get('TRIP_EXPIRY_SWEEP_SECONDS', { infer: true });
@@ -60,10 +62,13 @@ export class TripExpiryService implements OnModuleInit, OnModuleDestroy {
       })
       .where('status = :requested', { requested: TripStatus.REQUESTED })
       .andWhere('requested_at <= now() - make_interval(secs => :ttl)', { ttl: this.ttlSeconds })
-      .returning(['id'])
+      .returning('id, passenger_id')
       .execute();
-    const ids = (result.raw as { id: string }[]).map((row) => row.id);
-    if (ids.length) this.logger.log(`Expired ${ids.length} unaccepted trip request(s)`);
-    return ids;
+    const rows = result.raw as { id: string; passenger_id: string }[];
+    if (rows.length) this.logger.log(`Expired ${rows.length} unaccepted trip request(s)`);
+    for (const row of rows) {
+      this.events.publish({ type: 'expired', tripId: row.id, passengerId: row.passenger_id });
+    }
+    return rows.map((row) => row.id);
   }
 }

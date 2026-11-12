@@ -7,6 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import type { Socket } from 'socket.io';
 import { STATUS_CODES } from 'node:http';
 import type { FieldError } from '../errors/api-validation.exception.js';
 import type { ErrorResponse } from '../response/api-response.js';
@@ -19,7 +20,7 @@ interface ErrorBody {
 }
 
 /**
- * Formats every error as the spec's `ErrorResponse` envelope:
+ * Formats every error, HTTP or WebSocket, as the spec's `ErrorResponse` envelope:
  * `{ success: false, message, error: { statusCode, status, details? } }`.
  */
 @Catch()
@@ -27,14 +28,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
   private readonly logger = new Logger(AllExceptionsFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    const response = host.switchToHttp().getResponse<Response>();
     const { statusCode, error, message, details } = this.toBody(exception);
     const body: ErrorResponse = {
       success: false,
       message,
       error: { statusCode, status: error, ...(details ? { details } : {}) },
     };
-    response.status(statusCode).json(body);
+    if (host.getType() === 'ws') {
+      // A failed WebSocket message: the same error body, sent to that socket.
+      host.switchToWs().getClient<Socket>().emit('exception', body);
+      return;
+    }
+    host.switchToHttp().getResponse<Response>().status(statusCode).json(body);
   }
 
   private toBody(exception: unknown): ErrorBody {

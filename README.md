@@ -3,9 +3,9 @@
 NestJS 12 + PostgreSQL 17 + TypeORM backend for the API contract in
 [`ride-hailing-api.yaml`](ride-hailing-api.yaml).
 
-**Status: every REST endpoint in the spec is built** (Auth, Profile, Drivers,
-Fares, Trips and Driver Trips). The WebSocket events and push notifications
-are not built yet.
+**Status: every REST endpoint and WebSocket event in the spec is built**
+(Auth, Profile, Drivers, Fares, Trips, Driver Trips and the real-time trip
+events). Push notifications are not built yet.
 
 | Endpoint | Auth | Notes |
 |---|---|---|
@@ -54,6 +54,71 @@ npm run start:dev
 
 Postgres is exposed on **5433** (not 5432) so it does not clash with other
 local Postgres containers.
+
+## Real-time events (WebSocket)
+
+Socket.IO v4 on the same address as the API, without `/api`
+(e.g. `https://<service>.onrender.com`, path `/socket.io`). Connect with the
+access token from login or registration:
+
+| Direction | Event | When |
+|---|---|---|
+| Driver → server | `driver:location` `{ lat, lng, heading? }` | every few seconds while online or on a trip (acked with `{ accepted }`; max one per second) |
+| Server → Driver | `trip:request` | a trip is booked (online Drivers not on a trip) |
+| Server → Driver | `trip:withdrawn` `{ tripId, reason }` | the request was cancelled, taken by another Driver, or expired |
+| Server → Passenger | `trip:accepted` `{ tripId, driver, etaSeconds }` | a Driver accepted |
+| Server → Passenger | `driver:location` `{ tripId, lat, lng, heading?, etaSeconds }` | the Driver moved, during the trip |
+| Server → Passenger | `trip:arrived`, `trip:started` `{ tripId, status, at }` | the Driver arrived / started the ride |
+| Server → Passenger | `trip:completed` `{ tripId, fare, completedAt }` | the ride ended |
+| Server → Passenger | `trip:no_driver` `{ tripId }` | nobody accepted within 2 minutes; the trip is cancelled |
+| Server → client | `exception` | a message the client sent was rejected (error envelope) |
+
+**Mobile app (React Native / Expo, `socket.io-client`):**
+
+```ts
+import { io } from 'socket.io-client';
+
+const socket = io(API_URL, {          // e.g. https://ride-hailing-api.onrender.com
+  auth: { token: accessToken },
+  transports: ['websocket'],
+});
+
+socket.on('connect', () => refreshActiveTrip());   // re-sync on every (re)connect
+socket.on('connect_error', (err) => {
+  if (err.message === 'Missing or expired access token') signOut();
+});
+
+// Passenger
+socket.on('trip:accepted', ({ driver, etaSeconds }) => showDriver(driver, etaSeconds));
+socket.on('driver:location', ({ lat, lng, heading, etaSeconds }) => moveCar(lat, lng, heading, etaSeconds));
+socket.on('trip:completed', ({ fare }) => showFare(fare));
+
+// Driver
+socket.on('trip:request', (request) => showRequestAlert(request));
+socket.on('trip:withdrawn', ({ tripId }) => hideRequestAlert(tripId));
+setInterval(async () => {
+  const { coords } = await getCurrentPosition();
+  socket.emit('driver:location', { lat: coords.latitude, lng: coords.longitude, heading: coords.heading });
+}, 5000);
+```
+
+**Flutter (`socket_io_client`):**
+
+```dart
+final socket = IO.io(apiUrl, IO.OptionBuilder()
+    .setTransports(['websocket'])
+    .setAuth({'token': accessToken})
+    .build());
+socket.onConnect((_) => refreshActiveTrip());
+socket.on('trip:accepted', (data) => showDriver(data['driver'], data['etaSeconds']));
+socket.emit('driver:location', {'lat': lat, 'lng': lng, 'heading': heading});
+```
+
+Events are a live layer on top of REST, which stays the source of truth.
+After connecting or reconnecting (app back in the foreground, network change,
+or Render's free service waking up), re-fetch `GET /api/trips/active`, and
+Drivers `GET /api/trips/requests`. A WebSocket only delivers while the app is
+open; push notifications for a closed app are not built yet.
 
 ## Deploying to Render
 
@@ -140,6 +205,7 @@ src/
   trips/                                 Passenger and Driver trip endpoints, request expiry
   storage/                               file storage (disk or MongoDB GridFS) and signed photo links
   health/                                GET /api/health
+  realtime/                              Socket.IO gateway, trip events -> WebSocket events, driver:location
 test/                                    e2e tests (Vitest + Supertest)
 ```
 
@@ -195,10 +261,14 @@ test/                                    e2e tests (Vitest + Supertest)
   Passenger's cancellation reason.
 - **Driver presence.** Going online records the Driver's position; going
   offline or logging out clears it, and positions are only recorded while
-  online. Until WebSockets exist, every `GET /api/trips/requests?lat=&lng=`
-  also updates the position. The Passenger map shows online Drivers who are
+  online. Positions arrive as `driver:location` over the WebSocket, and also
+  from every `GET /api/trips/requests?lat=&lng=`. The Passenger map shows online Drivers who are
   not on a trip and reported a position in the last 5 minutes. Online status
   does not yet limit who sees trip requests.
+- **Real-time.** The trip services publish domain events (`TripEvents`) after
+  each change; `TripNotifier` turns them into Socket.IO events, so push
+  notifications can subscribe later without touching trip code. Sockets are
+  authenticated on connect and joined to a room per user (and `drivers`).
 - **Fares.** `FaresService.quote()` prices both quotes and bookings, so the
   quoted fare is always the fare charged.
 - **Normalisation.** Email is stored in lower case, and plate numbers in upper
@@ -208,9 +278,10 @@ test/                                    e2e tests (Vitest + Supertest)
 
 - `deviceToken` in the logout body is validated but not used yet, because push
   tokens are not registered until push notifications are built.
-- Real-time events and push notifications (`trip:request`, `trip:accepted`,
-  `driver:location`, ...). Drivers find requests through
-  `GET /api/trips/requests` for now, and send their position with it until
-  live location exists.
+- Push notifications (e.g. Firebase) for `trip:request` and the Passenger
+  trip events when the app is closed. The WebSocket events only reach an open
+  app.
+- Several API instances: rooms live in one process. Running more than one
+  instance needs the Socket.IO Redis adapter.
 - Online-only requests: any Driver without an active trip can see and accept
   requests, whether online or not.

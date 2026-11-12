@@ -12,6 +12,7 @@ import { buildTypeOrmOptions } from './database/typeorm-options.js';
 import { DriversModule } from './drivers/drivers.module.js';
 import { FaresModule } from './fares/fares.module.js';
 import { HealthModule } from './health/health.module.js';
+import { RealtimeModule } from './realtime/realtime.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { TripsModule } from './trips/trips.module.js';
 import { UsersModule } from './users/users.module.js';
@@ -37,6 +38,7 @@ import { UsersModule } from './users/users.module.js';
     DriversModule,
     FaresModule,
     HealthModule,
+    RealtimeModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

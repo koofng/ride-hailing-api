@@ -27,6 +27,8 @@ export interface AuthUser {
 @Injectable()
 export class TokenService {
   readonly expiresInSeconds: number;
+  /** Called with each revoked token, e.g. to close its WebSocket connections. */
+  private readonly revokedListeners: ((jti: string) => void)[] = [];
 
   constructor(
     private readonly jwt: JwtService,
@@ -70,5 +72,10 @@ export class TokenService {
       .execute();
     // Rows for tokens that have expired anyway are no longer needed.
     await this.revoked.delete({ expiresAt: LessThan(new Date()) });
+    for (const listener of this.revokedListeners) listener(user.jti);
+  }
+
+  onRevoked(listener: (jti: string) => void): void {
+    this.revokedListeners.push(listener);
   }
 }
