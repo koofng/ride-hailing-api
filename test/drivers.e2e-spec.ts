@@ -165,3 +165,140 @@ describe('PATCH /api/drivers/me/availability', () => {
     await ctx.http().patch('/api/drivers/me/availability').send({ available: false }).expect(401);
   });
 });
+
+// ------------------------------------------------------------------ listActiveDrivers
+describe('GET /api/drivers/active', () => {
+  /** About 1.1 km, 3.3 km and 5.6 km north of the town centre, and 25 km away. */
+  const NEAR = { lat: 45.6269, lng: -61.9986 };
+  const MID = { lat: 45.6469, lng: -61.9986 };
+  const FAR = { lat: 45.6669, lng: -61.9986 };
+  const OUTSIDE = { lat: 45.8419, lng: -61.9986 };
+  const AT_TOWN_CENTRE = `?lat=${TOWN_CENTRE.lat}&lng=${TOWN_CENTRE.lng}`;
+
+  const listActive = (token: string, query = AT_TOWN_CENTRE) =>
+    ctx.http().get(`/api/drivers/active${query}`).set(bearer(token));
+
+  /** A Driver who is online at `at`. */
+  const onlineDriver = async (at: { lat: number; lng: number }) => {
+    const driver = await signUpDriver(ctx);
+    await setAvailability(driver.token, { available: true, ...at }).expect(200);
+    return driver;
+  };
+
+  it('200: online Drivers nearby, nearest first, with position and time only', async () => {
+    const passenger = await signUpPassenger(ctx);
+    const mid = await onlineDriver(MID);
+    const near = await onlineDriver(NEAR);
+
+    const res = await listActive(passenger.token).expect(200);
+    expect(res.body).toEqual({
+      success: true,
+      message: 'Active drivers retrieved successfully',
+      data: [
+        { driverId: near.user.id, location: NEAR, lastUpdatedAt: expect.any(String) },
+        { driverId: mid.user.id, location: MID, lastUpdatedAt: expect.any(String) },
+      ],
+    });
+  });
+
+  it('never exposes a Driver’s name, phone or vehicle', async () => {
+    const passenger = await signUpPassenger(ctx);
+    const driver = await onlineDriver(NEAR);
+    const text = JSON.stringify((await listActive(passenger.token).expect(200)).body);
+    expect(text).not.toContain('John');
+    expect(text).not.toContain(driver.user.phone);
+    expect(text).not.toContain('Toyota');
+  });
+
+  it('leaves out offline Drivers, including ones who just went offline', async () => {
+    const passenger = await signUpPassenger(ctx);
+    await signUpDriver(ctx);
+    const wentOffline = await onlineDriver(NEAR);
+    await setAvailability(wentOffline.token, { available: false }).expect(200);
+    expect((await listActive(passenger.token).expect(200)).body.data).toEqual([]);
+  });
+
+  it('leaves out Drivers whose position is older than 5 minutes', async () => {
+    const passenger = await signUpPassenger(ctx);
+    const stale = await onlineDriver(NEAR);
+    const fresh = await onlineDriver(MID);
+    await ctx.db.query(
+      `UPDATE driver_details SET location_updated_at = now() - interval '301 seconds' WHERE user_id = $1`,
+      [stale.user.id],
+    );
+    const { body } = await listActive(passenger.token).expect(200);
+    expect(body.data.map((d: { driverId: string }) => d.driverId)).toEqual([fresh.user.id]);
+  });
+
+  it.each(['ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'])('leaves out a Driver whose trip is %s', async (status) => {
+    const driver = await onlineDriver(NEAR);
+    const { passenger } = await tripWithDriver(driver.user.id, status);
+    expect((await listActive(passenger.token).expect(200)).body.data).toEqual([]);
+  });
+
+  it('shows the Driver again once their trip is completed', async () => {
+    const driver = await onlineDriver(NEAR);
+    const { passenger } = await tripWithDriver(driver.user.id, 'COMPLETED');
+    expect((await listActive(passenger.token).expect(200)).body.data).toHaveLength(1);
+  });
+
+  it('uses radiusKm (default 5)', async () => {
+    const passenger = await signUpPassenger(ctx);
+    await onlineDriver(NEAR);
+    await onlineDriver(FAR);
+    await onlineDriver(OUTSIDE);
+
+    const ids = async (query: string) =>
+      (await listActive(passenger.token, query).expect(200)).body.data.length;
+    expect(await ids(AT_TOWN_CENTRE)).toBe(1);
+    expect(await ids(`${AT_TOWN_CENTRE}&radiusKm=6`)).toBe(2);
+    expect(await ids(`${AT_TOWN_CENTRE}&radiusKm=0.5`)).toBe(0);
+    expect(await ids(`${AT_TOWN_CENTRE}&radiusKm=20`)).toBe(2);
+  });
+
+  it('a Driver listing trip requests updates their position on the map', async () => {
+    const passenger = await signUpPassenger(ctx);
+    const driver = await onlineDriver(OUTSIDE);
+    expect((await listActive(passenger.token).expect(200)).body.data).toEqual([]);
+
+    await ctx
+      .http()
+      .get(`/api/trips/requests?lat=${NEAR.lat}&lng=${NEAR.lng}`)
+      .set(bearer(driver.token))
+      .expect(200);
+    const { body } = await listActive(passenger.token).expect(200);
+    expect(body.data).toEqual([{ driverId: driver.user.id, location: NEAR, lastUpdatedAt: expect.any(String) }]);
+  });
+
+  it('listing trip requests while offline does not record a position', async () => {
+    const driver = await signUpDriver(ctx);
+    await ctx
+      .http()
+      .get(`/api/trips/requests?lat=${NEAR.lat}&lng=${NEAR.lng}`)
+      .set(bearer(driver.token))
+      .expect(200);
+    expect(await driverRow(driver.user.id)).toMatchObject({ available: false, last_lat: null });
+  });
+
+  it.each([
+    ['', [
+      { field: 'lat', message: 'Latitude is required' },
+      { field: 'lng', message: 'Longitude is required' },
+    ]],
+    [`${AT_TOWN_CENTRE}&radiusKm=0.05`, [{ field: 'radiusKm', message: 'Radius must be between 0.1 and 20 km' }]],
+    [`${AT_TOWN_CENTRE}&radiusKm=21`, [{ field: 'radiusKm', message: 'Radius must be between 0.1 and 20 km' }]],
+    [`${AT_TOWN_CENTRE}&radiusKm=far`, [{ field: 'radiusKm', message: 'Radius must be a number' }]],
+  ])('400: %j', async (query, details) => {
+    const passenger = await signUpPassenger(ctx);
+    expect((await listActive(passenger.token, query).expect(400)).body.error.details).toEqual(details);
+  });
+
+  it('403: a Driver cannot list other Drivers', async () => {
+    const driver = await onlineDriver(NEAR);
+    expect((await listActive(driver.token).expect(403)).body).toEqual(FORBIDDEN);
+  });
+
+  it('401: no token', async () => {
+    await ctx.http().get(`/api/drivers/active${AT_TOWN_CENTRE}`).expect(401);
+  });
+});
