@@ -16,9 +16,16 @@ export interface AppEnv {
   UPLOAD_DIR: string;
   PUBLIC_BASE_URL: string;
   FILE_URL_TTL_SECONDS: number;
+  STORAGE_DRIVER: StorageDriver;
+  /** Set only when STORAGE_DRIVER is gridfs. */
+  MONGODB_URI: string | undefined;
   TRIP_REQUEST_TTL_SECONDS: number;
   TRIP_EXPIRY_SWEEP_SECONDS: number;
 }
+
+/** Where uploaded files are kept: local disk (default) or MongoDB GridFS. */
+export type StorageDriver = 'disk' | 'gridfs';
+const STORAGE_DRIVERS: readonly StorageDriver[] = ['disk', 'gridfs'];
 
 export function validateEnv(raw: Record<string, unknown>): AppEnv {
   const errors: string[] = [];
@@ -56,13 +63,24 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
     JWT_EXPIRES_IN_SECONDS: int('JWT_EXPIRES_IN_SECONDS', 86400, 60, 2_592_000),
     BCRYPT_ROUNDS: int('BCRYPT_ROUNDS', 12, 4, 15),
     UPLOAD_DIR: str('UPLOAD_DIR', 'uploads'),
-    // Defaults to this server on PORT. Set it only when clients reach the API
-    // at a different address (a domain, a proxy or a mapped Docker port).
-    PUBLIC_BASE_URL: str('PUBLIC_BASE_URL', `http://localhost:${port}`).replace(/\/+$/, ''),
+    // The address clients use to reach the API, for signed photo links. Set
+    // PUBLIC_BASE_URL for a custom domain or proxy; on Render it defaults to
+    // the service's public URL (RENDER_EXTERNAL_URL, set by Render); locally,
+    // to this server on PORT.
+    PUBLIC_BASE_URL: str(
+      'PUBLIC_BASE_URL',
+      nonEmpty(raw.RENDER_EXTERNAL_URL) ?? `http://localhost:${port}`,
+    ).replace(/\/+$/, ''),
     FILE_URL_TTL_SECONDS: int('FILE_URL_TTL_SECONDS', 900, 60, 86_400),
+    STORAGE_DRIVER: storageDriver(raw.STORAGE_DRIVER, errors),
+    MONGODB_URI: undefined,
     TRIP_REQUEST_TTL_SECONDS: int('TRIP_REQUEST_TTL_SECONDS', 120, 30, 3600),
     TRIP_EXPIRY_SWEEP_SECONDS: int('TRIP_EXPIRY_SWEEP_SECONDS', 10, 0, 300),
   };
+
+  if (env.STORAGE_DRIVER === 'gridfs') {
+    env.MONGODB_URI = mongoUri(raw.MONGODB_URI, errors);
+  }
 
   if (env.JWT_SECRET && env.JWT_SECRET.length < 32) {
     errors.push('JWT_SECRET must be at least 32 characters');
@@ -73,3 +91,38 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
   }
   return env;
 }
+
+function storageDriver(value: unknown, errors: string[]): StorageDriver {
+  if (value === undefined || value === '') return 'disk';
+  const driver = String(value).trim().toLowerCase();
+  if (!STORAGE_DRIVERS.includes(driver as StorageDriver)) {
+    errors.push(`STORAGE_DRIVER must be one of: ${STORAGE_DRIVERS.join(', ')}`);
+    return 'disk';
+  }
+  return driver as StorageDriver;
+}
+
+/** A MongoDB connection string that names its database, e.g. mongodb+srv://…/ride_hailing */
+function mongoUri(value: unknown, errors: string[]): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') {
+    errors.push('MONGODB_URI is required when STORAGE_DRIVER is gridfs');
+    return undefined;
+  }
+  const uri = value.trim();
+  let database = '';
+  try {
+    const url = new URL(uri);
+    if (url.protocol !== 'mongodb:' && url.protocol !== 'mongodb+srv:') throw new Error();
+    database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+  } catch {
+    errors.push('MONGODB_URI must be a mongodb:// or mongodb+srv:// connection string');
+    return undefined;
+  }
+  if (!database) {
+    errors.push('MONGODB_URI must include a database name, e.g. mongodb+srv://user:pass@host/ride_hailing');
+  }
+  return uri;
+}
+
+const nonEmpty = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;

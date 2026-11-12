@@ -1,7 +1,8 @@
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { readdir, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import { MongoClient } from 'mongodb';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module.js';
@@ -31,14 +32,42 @@ export async function resetDatabase(db: DataSource): Promise<void> {
   await db.query('TRUNCATE "trip_declines", "trips", "revoked_tokens", "driver_details", "users" CASCADE');
 }
 
+const usesGridFs = () => process.env.STORAGE_DRIVER === 'gridfs';
+
+/** Runs `fn` against the app's GridFS `uploads` bucket collections. */
+async function withGridFs<T>(fn: (db: ReturnType<MongoClient['db']>) => Promise<T>): Promise<T> {
+  const client = await MongoClient.connect(process.env.MONGODB_URI!);
+  try {
+    return await fn(client.db());
+  } finally {
+    await client.close();
+  }
+}
+
 export async function clearUploads(): Promise<void> {
+  if (usesGridFs()) {
+    await withGridFs(async (db) => {
+      await db.collection('uploads.files').deleteMany({});
+      await db.collection('uploads.chunks').deleteMany({});
+    });
+    return;
+  }
   for (const sub of ['public', 'private']) {
     await rm(join(process.env.UPLOAD_DIR!, sub), { recursive: true, force: true });
   }
 }
 
-/** Lists files written under UPLOAD_DIR/<sub>, recursively. */
+/** Lists the names of stored files under `<sub>/` (public or private), on either backend. */
 export async function listUploads(sub: string): Promise<string[]> {
+  if (usesGridFs()) {
+    return withGridFs(async (db) => {
+      const files = await db
+        .collection<{ filename: string }>('uploads.files')
+        .find({ filename: { $regex: `^${sub}/` } })
+        .toArray();
+      return files.map((f) => basename(f.filename));
+    });
+  }
   try {
     const entries = await readdir(join(process.env.UPLOAD_DIR!, sub), {
       recursive: true,

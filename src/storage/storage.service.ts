@@ -1,11 +1,11 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { createReadStream, type ReadStream } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
 import type { AppEnv } from '../config/env.validation.js';
 import type { AllowedMimeType } from './file-type.js';
+import { FILE_STORE, type FileStore, type StoredFile } from './file-store.js';
+
+export type { StoredFile } from './file-store.js';
 
 /**
  * Nothing in storage is served as a static file.
@@ -22,27 +22,21 @@ const EXTENSIONS: Record<AllowedMimeType, string> = {
 
 const PHOTO_FOLDER = 'public/photos';
 const PHOTO_NAME = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png)$/;
-const PHOTO_CONTENT_TYPES: Record<string, string> = { jpg: 'image/jpeg', png: 'image/png' };
-
-export interface StoredFile {
-  stream: ReadStream;
-  size: number;
-  contentType: string;
-}
 
 /**
- * Local-disk file storage. Kept behind this service so it can be swapped for
- * S3 or similar later without touching callers.
+ * Uploaded files: storage keys, visibility and signed photo links. The bytes
+ * themselves go to the configured FileStore (see StorageModule).
  */
 @Injectable()
-export class StorageService implements OnModuleInit {
-  private readonly root: string;
+export class StorageService implements OnModuleInit, OnModuleDestroy {
   private readonly publicBaseUrl: string;
   private readonly linkTtlSeconds: number;
   private readonly signingKey: Buffer;
 
-  constructor(config: ConfigService<AppEnv, true>) {
-    this.root = resolve(config.get('UPLOAD_DIR', { infer: true }));
+  constructor(
+    config: ConfigService<AppEnv, true>,
+    @Inject(FILE_STORE) private readonly store: FileStore,
+  ) {
     this.publicBaseUrl = config.get('PUBLIC_BASE_URL', { infer: true });
     this.linkTtlSeconds = config.get('FILE_URL_TTL_SECONDS', { infer: true });
     // Derived from JWT_SECRET with its own label, so a file signature can
@@ -52,9 +46,12 @@ export class StorageService implements OnModuleInit {
       .digest();
   }
 
-  async onModuleInit(): Promise<void> {
-    await mkdir(join(this.root, 'public'), { recursive: true });
-    await mkdir(join(this.root, 'private'), { recursive: true });
+  onModuleInit(): Promise<void> {
+    return this.store.init();
+  }
+
+  onModuleDestroy(): Promise<void> {
+    return this.store.close();
   }
 
   /** Saves a file and returns its storage key, e.g. `public/photos/<uuid>.jpg`. */
@@ -65,8 +62,7 @@ export class StorageService implements OnModuleInit {
     folder: string,
   ): Promise<string> {
     const key = `${visibility}/${folder}/${randomUUID()}.${EXTENSIONS[mimeType]}`;
-    await mkdir(join(this.root, visibility, folder), { recursive: true });
-    await writeFile(join(this.root, key), buffer, { flag: 'wx' });
+    await this.store.put(key, buffer, mimeType);
     return key;
   }
 
@@ -93,26 +89,24 @@ export class StorageService implements OnModuleInit {
     sig: unknown,
     now = Date.now(),
   ): Promise<StoredFile | null> {
-    const match = PHOTO_NAME.exec(name);
-    if (!match || typeof expires !== 'string' || typeof sig !== 'string') return null;
+    if (!PHOTO_NAME.test(name) || typeof expires !== 'string' || typeof sig !== 'string') return null;
     if (!/^\d{1,12}$/.test(expires) || Number(expires) * 1000 <= now) return null;
 
     const expected = Buffer.from(this.sign(name, Number(expires)));
     const given = Buffer.from(sig);
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
 
-    const path = join(this.root, PHOTO_FOLDER, name);
-    try {
-      const { size } = await stat(path);
-      return { stream: createReadStream(path), size, contentType: PHOTO_CONTENT_TYPES[match[1]] };
-    } catch {
-      return null;
-    }
+    return this.store.open(`${PHOTO_FOLDER}/${name}`);
+  }
+
+  /** Resolves if the file store is reachable. */
+  ping(): Promise<void> {
+    return this.store.ping();
   }
 
   /** Best-effort delete, used to clean up after a failed write or a replaced photo. */
   async remove(keys: string[]): Promise<void> {
-    await Promise.all(keys.map((key) => rm(join(this.root, key), { force: true })));
+    await this.store.delete(keys);
   }
 
   private sign(name: string, expires: number): string {

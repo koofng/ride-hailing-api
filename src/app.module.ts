@@ -9,6 +9,7 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor.
 import { toFieldErrors } from './common/validation/to-field-errors.js';
 import { validateEnv, type AppEnv } from './config/env.validation.js';
 import { buildTypeOrmOptions } from './database/typeorm-options.js';
+import { HealthModule } from './health/health.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { TripsModule } from './trips/trips.module.js';
 import { UsersModule } from './users/users.module.js';
@@ -31,6 +32,7 @@ import { UsersModule } from './users/users.module.js';
     UsersModule,
     AuthModule,
     TripsModule,
+    HealthModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

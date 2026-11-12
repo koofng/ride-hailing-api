@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AppEnv } from '../config/env.validation.js';
+import { DiskFileStore } from './disk-file-store.js';
 import { StorageService } from './storage.service.js';
 
 const NAME = '3f6c1b2a-8d4e-4f0a-9b1c-2e7d5a9c4f11.jpg';
@@ -14,12 +15,14 @@ let root: string;
 
 const makeStorage = (secret = 'test-secret-that-is-at-least-32-characters-long') => {
   const env: Record<string, unknown> = {
-    UPLOAD_DIR: root,
     PUBLIC_BASE_URL: 'http://localhost:3000',
     FILE_URL_TTL_SECONDS: TTL,
     JWT_SECRET: secret,
   };
-  return new StorageService({ get: (key: string) => env[key] } as unknown as ConfigService<AppEnv, true>);
+  return new StorageService(
+    { get: (key: string) => env[key] } as unknown as ConfigService<AppEnv, true>,
+    new DiskFileStore(root),
+  );
 };
 
 /** Splits a signed URL into the arguments the files endpoint receives. */
