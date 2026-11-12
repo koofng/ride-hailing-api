@@ -28,6 +28,15 @@ export class TripsController {
     return this.trips.list(caller, query);
   }
 
+  /** operationId: getActiveTrip. Declared before :tripId so "active" is not taken as an id. */
+  @Get('active')
+  @ResponseMessage((trip: TripResponse | null) =>
+    trip ? 'Active trip retrieved successfully' : 'You have no active trip',
+  )
+  getActiveTrip(@CurrentUser() caller: AuthUser): Promise<TripResponse | null> {
+    return this.trips.findActive(caller);
+  }
+
   /** operationId: getTrip */
   @Get(':tripId')
   @ResponseMessage('Trip retrieved successfully')

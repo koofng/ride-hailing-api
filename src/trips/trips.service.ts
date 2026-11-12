@@ -93,6 +93,18 @@ export class TripsService {
   }
 
   /**
+   * The trip a Passenger or Driver is currently on, or null. A Driver has no
+   * active trip until they accept one, so REQUESTED never matches for them.
+   */
+  async findActive(caller: AuthUser): Promise<TripResponse | null> {
+    const trip = await this.trips.findOne({
+      where: { ...this.ownedBy(caller), status: In([...ACTIVE_STATUSES]) },
+      relations: WITH_PEOPLE,
+    });
+    return trip ? this.view(trip, caller) : null;
+  }
+
+  /**
    * A trip the caller is not on gets the same 404 as one that does not exist,
    * so trip IDs cannot be probed.
    */

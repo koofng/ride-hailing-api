@@ -488,3 +488,76 @@ describe('GET /api/trips', () => {
     await ctx.http().get('/api/trips').expect(401);
   });
 });
+
+// ------------------------------------------------------------------ getActiveTrip
+describe('GET /api/trips/active', () => {
+  const getActive = (token: string) => ctx.http().get('/api/trips/active').set(bearer(token));
+
+  const NONE = { success: true, message: 'You have no active trip', data: null };
+
+  it('200: Passenger with no trips gets data null', async () => {
+    const passenger = await signUpPassenger(ctx);
+    const res = await getActive(passenger.token).expect(200);
+    expect(res.body).toEqual(NONE);
+  });
+
+  it('200: Passenger gets their REQUESTED trip, same as getTrip', async () => {
+    const passenger = await signUpPassenger(ctx);
+    const created = await createTrip(passenger.token).expect(201);
+    const res = await getActive(passenger.token).expect(200);
+    expect(res.body).toEqual({
+      success: true,
+      message: 'Active trip retrieved successfully',
+      data: created.body.data,
+    });
+  });
+
+  it.each(['ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'])(
+    '200: both Passenger and Driver see the trip while %s',
+    async (status) => {
+      const passenger = await signUpPassenger(ctx);
+      const driver = await signUpDriver(ctx);
+      const { body } = await createTrip(passenger.token).expect(201);
+      await assignDriver(body.data.id, driver.user.id, status);
+
+      const forPassenger = await getActive(passenger.token).expect(200);
+      const forDriver = await getActive(driver.token).expect(200);
+
+      expect(forPassenger.body.data).toMatchObject({ id: body.data.id, status });
+      expect(forPassenger.body.data.driver.id).toBe(driver.user.id);
+      expect(forDriver.body.data).toMatchObject({ id: body.data.id, status });
+      expect(forDriver.body.data.passenger.id).toBe(passenger.user.id);
+    },
+  );
+
+  it('a Driver has no active trip while a request is still unaccepted', async () => {
+    const passenger = await signUpPassenger(ctx);
+    const driver = await signUpDriver(ctx);
+    await createTrip(passenger.token).expect(201);
+    expect((await getActive(driver.token).expect(200)).body).toEqual(NONE);
+  });
+
+  it.each([
+    ['COMPLETED', `status = 'COMPLETED', driver_id = $2, completed_at = now()`],
+    ['CANCELLED', `status = 'CANCELLED', cancel_reason = 'NO_DRIVER_FOUND', cancelled_at = now()`],
+  ])('data null for both once the trip is %s', async (_status, sql) => {
+    const passenger = await signUpPassenger(ctx);
+    const driver = await signUpDriver(ctx);
+    const { body } = await createTrip(passenger.token).expect(201);
+    await setTrip(body.data.id, sql, sql.includes('$2') ? [driver.user.id] : []);
+
+    expect((await getActive(passenger.token).expect(200)).body).toEqual(NONE);
+    expect((await getActive(driver.token).expect(200)).body).toEqual(NONE);
+  });
+
+  it("never returns someone else's active trip", async () => {
+    const passenger = await signUpPassenger(ctx);
+    await createTrip(passenger.token).expect(201);
+    const other = await signUpPassenger(ctx);
+    expect((await getActive(other.token).expect(200)).body).toEqual(NONE);
+  });
+
+  it('401: no token', async () => {
+    await ctx.http().get('/api/trips/active').expect(401);
+  });
+});
