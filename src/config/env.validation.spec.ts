@@ -28,3 +28,34 @@ describe('validateEnv PUBLIC_BASE_URL', () => {
     );
   });
 });
+
+describe('validateEnv storage', () => {
+  it('defaults to disk storage and needs no MongoDB', () => {
+    const env = validateEnv(base);
+    expect(env.STORAGE_DRIVER).toBe('disk');
+    expect(env.MONGODB_URI).toBeUndefined();
+  });
+
+  it('accepts gridfs with a connection string that names a database', () => {
+    const uri = 'mongodb+srv://app:secret@cluster0.abcde.mongodb.net/ride_hailing?retryWrites=true&w=majority';
+    const env = validateEnv({ ...base, STORAGE_DRIVER: 'GridFS', MONGODB_URI: uri });
+    expect(env.STORAGE_DRIVER).toBe('gridfs');
+    expect(env.MONGODB_URI).toBe(uri);
+  });
+
+  it('ignores MONGODB_URI when storage is on disk', () => {
+    expect(validateEnv({ ...base, MONGODB_URI: 'nonsense' }).MONGODB_URI).toBeUndefined();
+  });
+
+  it.each([
+    [{ STORAGE_DRIVER: 's3' }, 'STORAGE_DRIVER must be one of: disk, gridfs'],
+    [{ STORAGE_DRIVER: 'gridfs' }, 'MONGODB_URI is required when STORAGE_DRIVER is gridfs'],
+    [{ STORAGE_DRIVER: 'gridfs', MONGODB_URI: 'postgres://x/y' }, 'MONGODB_URI must be a mongodb:// or mongodb+srv:// connection string'],
+    [
+      { STORAGE_DRIVER: 'gridfs', MONGODB_URI: 'mongodb+srv://app:secret@cluster0.abcde.mongodb.net/?retryWrites=true' },
+      'MONGODB_URI must include a database name',
+    ],
+  ])('rejects %j', (overrides, message) => {
+    expect(() => validateEnv({ ...base, ...overrides })).toThrow(message);
+  });
+});

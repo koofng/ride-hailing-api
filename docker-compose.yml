@@ -19,6 +19,21 @@ services:
       timeout: 5s
       retries: 10
 
+  # Local stand-in for MongoDB Atlas, used when STORAGE_DRIVER=gridfs and by
+  # the e2e tests. Not needed for the default disk storage.
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:${MONGO_PORT:-27018}:27017'
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.adminCommand("ping").ok']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     build: .
     restart: unless-stopped
@@ -39,4 +54,5 @@ services:
 
 volumes:
   db-data:
+  mongo-data:
   uploads:

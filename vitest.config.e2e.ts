@@ -2,6 +2,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
+// The compose `mongo` service; a separate database keeps test files apart.
+const TEST_MONGODB_URI =
+  process.env.TEST_MONGODB_URI ?? 'mongodb://localhost:27018/ride_hailing_test';
+
 // End-to-end tests: boot the full Nest app against a real PostgreSQL database
 // (the `ride_hailing_test` database created by docker/postgres/init).
 export default defineConfig({
@@ -25,6 +29,10 @@ export default defineConfig({
       BCRYPT_ROUNDS: '4',
       UPLOAD_DIR: join(tmpdir(), 'ride-hailing-e2e-uploads'),
       PUBLIC_BASE_URL: 'http://localhost:3000',
+      // `npm run test:e2e:gridfs` runs the same suite with uploads in GridFS.
+      STORAGE_DRIVER: process.env.STORAGE_DRIVER ?? 'disk',
+      MONGODB_URI: TEST_MONGODB_URI,
+      TEST_MONGODB_URI,
     },
   },
 });

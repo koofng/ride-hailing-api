@@ -16,7 +16,14 @@ export interface AppEnv {
   UPLOAD_DIR: string;
   PUBLIC_BASE_URL: string;
   FILE_URL_TTL_SECONDS: number;
+  STORAGE_DRIVER: StorageDriver;
+  /** Set only when STORAGE_DRIVER is gridfs. */
+  MONGODB_URI: string | undefined;
 }
+
+/** Where uploaded files are kept: local disk (default) or MongoDB GridFS. */
+export type StorageDriver = 'disk' | 'gridfs';
+const STORAGE_DRIVERS: readonly StorageDriver[] = ['disk', 'gridfs'];
 
 export function validateEnv(raw: Record<string, unknown>): AppEnv {
   const errors: string[] = [];
@@ -58,7 +65,13 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
     // at a different address (a domain, a proxy or a mapped Docker port).
     PUBLIC_BASE_URL: str('PUBLIC_BASE_URL', `http://localhost:${port}`).replace(/\/+$/, ''),
     FILE_URL_TTL_SECONDS: int('FILE_URL_TTL_SECONDS', 900, 60, 86_400),
+    STORAGE_DRIVER: storageDriver(raw.STORAGE_DRIVER, errors),
+    MONGODB_URI: undefined,
   };
+
+  if (env.STORAGE_DRIVER === 'gridfs') {
+    env.MONGODB_URI = mongoUri(raw.MONGODB_URI, errors);
+  }
 
   if (env.JWT_SECRET && env.JWT_SECRET.length < 32) {
     errors.push('JWT_SECRET must be at least 32 characters');
@@ -68,4 +81,36 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
     throw new Error(`Invalid environment configuration:\n- ${errors.join('\n- ')}`);
   }
   return env;
+}
+
+function storageDriver(value: unknown, errors: string[]): StorageDriver {
+  if (value === undefined || value === '') return 'disk';
+  const driver = String(value).trim().toLowerCase();
+  if (!STORAGE_DRIVERS.includes(driver as StorageDriver)) {
+    errors.push(`STORAGE_DRIVER must be one of: ${STORAGE_DRIVERS.join(', ')}`);
+    return 'disk';
+  }
+  return driver as StorageDriver;
+}
+
+/** A MongoDB connection string that names its database, e.g. mongodb+srv://…/ride_hailing */
+function mongoUri(value: unknown, errors: string[]): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') {
+    errors.push('MONGODB_URI is required when STORAGE_DRIVER is gridfs');
+    return undefined;
+  }
+  const uri = value.trim();
+  let database = '';
+  try {
+    const url = new URL(uri);
+    if (url.protocol !== 'mongodb:' && url.protocol !== 'mongodb+srv:') throw new Error();
+    database = decodeURIComponent(url.pathname.replace(/^\//, ''));
+  } catch {
+    errors.push('MONGODB_URI must be a mongodb:// or mongodb+srv:// connection string');
+    return undefined;
+  }
+  if (!database) {
+    errors.push('MONGODB_URI must include a database name, e.g. mongodb+srv://user:pass@host/ride_hailing');
+  }
+  return uri;
 }
