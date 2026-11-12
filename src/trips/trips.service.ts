@@ -10,16 +10,26 @@ import { In, QueryFailedError, Repository, type FindOptionsWhere } from 'typeorm
 import type { AuthUser } from '../auth/token.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import { Role } from '../users/role.enum.js';
+import type { CancelTripDto } from './dto/cancel-trip.dto.js';
 import type { CreateTripDto } from './dto/create-trip.dto.js';
 import type { ListTripsQuery } from './dto/list-trips.query.js';
 import { Trip } from './entities/trip.entity.js';
 import { FIXED_FARE, isWithinServiceArea } from './pricing.js';
-import { ACTIVE_STATUSES, TripStatus } from './trip.enums.js';
+import { ACTIVE_STATUSES, CancelReason, TripStatus } from './trip.enums.js';
 import { toTripView, type TripResponse } from './trip-view.js';
 
 export const ALREADY_ACTIVE = 'You already have an active trip';
 export const OUTSIDE_SERVICE_AREA = 'Pickup or destination is outside the Antigonish service area';
 export const TRIP_NOT_FOUND = 'Trip not found';
+
+/** Why a trip that is no longer REQUESTED cannot be cancelled. */
+const CANNOT_CANCEL: Partial<Record<TripStatus, string>> = {
+  [TripStatus.ACCEPTED]: 'A Driver has already accepted this trip, so it can no longer be cancelled',
+  [TripStatus.DRIVER_ARRIVED]: 'A Driver has already accepted this trip, so it can no longer be cancelled',
+  [TripStatus.IN_PROGRESS]: 'A Driver has already accepted this trip, so it can no longer be cancelled',
+  [TripStatus.COMPLETED]: 'This trip has already been completed',
+  [TripStatus.CANCELLED]: 'This trip has already been cancelled',
+};
 
 /** Spec: `TripPage` */
 export interface TripPage {
@@ -119,6 +129,39 @@ export class TripsService {
       throw new NotFoundException(TRIP_NOT_FOUND);
     }
     return this.view(trip, caller);
+  }
+
+  /**
+   * Cancels the Passenger's trip, only while it is REQUESTED. A single
+   * conditional UPDATE, so a cancel and a Driver accepting at the same moment
+   * cannot both succeed.
+   */
+  async cancel(caller: AuthUser, tripId: string, dto: CancelTripDto): Promise<TripResponse> {
+    if (!isUUID(tripId)) throw new NotFoundException(TRIP_NOT_FOUND);
+
+    const result = await this.trips
+      .createQueryBuilder()
+      .update(Trip)
+      .set({
+        status: TripStatus.CANCELLED,
+        cancelReason: CancelReason.PASSENGER_CANCELLED,
+        passengerCancelReason: dto.reason,
+        cancelNote: dto.note ?? null,
+        cancelledAt: () => 'now()',
+      })
+      .where('id = :tripId AND passenger_id = :passengerId AND status = :requested', {
+        tripId,
+        passengerId: caller.id,
+        requested: TripStatus.REQUESTED,
+      })
+      .execute();
+
+    if (!result.affected) {
+      const trip = await this.trips.findOne({ where: { id: tripId, passengerId: caller.id } });
+      if (!trip) throw new NotFoundException(TRIP_NOT_FOUND);
+      throw new ConflictException(CANNOT_CANCEL[trip.status]);
+    }
+    return this.view(await this.load(tripId), caller);
   }
 
   /** Passengers own the trips they booked; Drivers the trips they accepted. */

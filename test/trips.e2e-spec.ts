@@ -561,3 +561,162 @@ describe('GET /api/trips/active', () => {
     await ctx.http().get('/api/trips/active').expect(401);
   });
 });
+
+// ------------------------------------------------------------------ cancelTrip
+describe('POST /api/trips/:tripId/cancel', () => {
+  const cancel = (token: string, id: string, body: object = { reason: 'CHANGED_MIND' }) =>
+    ctx.http().post(`/api/trips/${id}/cancel`).set(bearer(token)).send(body);
+
+  const booked = async () => {
+    const passenger = await signUpPassenger(ctx);
+    const { body } = await createTrip(passenger.token).expect(201);
+    return { passenger, tripId: body.data.id as string };
+  };
+
+  it('200: Passenger cancels a REQUESTED trip with a reason and note', async () => {
+    const { passenger, tripId } = await booked();
+    const res = await cancel(passenger.token, tripId, { reason: 'OTHER', note: '  Found another ride  ' }).expect(200);
+
+    expect(res.body).toMatchObject({
+      success: true,
+      message: 'Trip cancelled successfully',
+      data: {
+        id: tripId,
+        status: 'CANCELLED',
+        cancelReason: 'PASSENGER_CANCELLED',
+        cancelDetails: { reason: 'OTHER', note: 'Found another ride' },
+        cancelledAt: expect.stringMatching(ISO_DATE),
+        driver: null,
+      },
+    });
+    expect(res.body.data.passenger.id).toBe(passenger.user.id);
+  });
+
+  it.each(['CHANGED_MIND', 'WAIT_TOO_LONG', 'BOOKED_BY_MISTAKE', 'OTHER'])(
+    'accepts reason %s without a note',
+    async (reason) => {
+      const { passenger, tripId } = await booked();
+      const res = await cancel(passenger.token, tripId, { reason }).expect(200);
+      expect(res.body.data.cancelDetails).toEqual({ reason, note: null });
+    },
+  );
+
+  it('persists, and the Passenger can then book again', async () => {
+    const { passenger, tripId } = await booked();
+    await cancel(passenger.token, tripId).expect(200);
+
+    const [row] = await ctx.db.query(
+      'SELECT status, cancel_reason, passenger_cancel_reason, cancelled_at FROM trips',
+    );
+    expect(row).toMatchObject({
+      status: 'CANCELLED',
+      cancel_reason: 'PASSENGER_CANCELLED',
+      passenger_cancel_reason: 'CHANGED_MIND',
+      cancelled_at: expect.any(Date),
+    });
+    await ctx.http().get('/api/trips/active').set(bearer(passenger.token)).expect(200, {
+      success: true,
+      message: 'You have no active trip',
+      data: null,
+    });
+    await createTrip(passenger.token).expect(201);
+  });
+
+  describe('409 once the trip is past REQUESTED', () => {
+    it.each(['ACCEPTED', 'DRIVER_ARRIVED', 'IN_PROGRESS'])('%s', async (status) => {
+      const { passenger, tripId } = await booked();
+      const driver = await signUpDriver(ctx);
+      await assignDriver(tripId, driver.user.id, status);
+
+      const res = await cancel(passenger.token, tripId).expect(409);
+      expect(res.body).toEqual({
+        success: false,
+        message: 'A Driver has already accepted this trip, so it can no longer be cancelled',
+        error: { statusCode: 409, status: 'Conflict' },
+      });
+      const [row] = await ctx.db.query('SELECT status FROM trips');
+      expect(row.status).toBe(status);
+    });
+
+    it('COMPLETED', async () => {
+      const { passenger, tripId } = await booked();
+      const driver = await signUpDriver(ctx);
+      await assignDriver(tripId, driver.user.id, 'COMPLETED');
+      const res = await cancel(passenger.token, tripId).expect(409);
+      expect(res.body.message).toBe('This trip has already been completed');
+    });
+
+    it('already CANCELLED (the first reason is kept)', async () => {
+      const { passenger, tripId } = await booked();
+      await cancel(passenger.token, tripId, { reason: 'WAIT_TOO_LONG' }).expect(200);
+      const res = await cancel(passenger.token, tripId, { reason: 'OTHER' }).expect(409);
+      expect(res.body.message).toBe('This trip has already been cancelled');
+      const [row] = await ctx.db.query('SELECT passenger_cancel_reason FROM trips');
+      expect(row.passenger_cancel_reason).toBe('WAIT_TOO_LONG');
+    });
+  });
+
+  it('concurrent cancels: exactly one succeeds', async () => {
+    const { passenger, tripId } = await booked();
+    const results = await Promise.all([1, 2, 3].map(() => cancel(passenger.token, tripId)));
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409, 409]);
+  });
+
+  it('400: reason is required', async () => {
+    const { passenger, tripId } = await booked();
+    const res = await cancel(passenger.token, tripId, {}).expect(400);
+    expect(res.body).toEqual({
+      success: false,
+      message: 'Request failed validation',
+      error: {
+        statusCode: 400,
+        status: 'Bad Request',
+        details: [{ field: 'reason', message: 'Cancellation reason is required' }],
+      },
+    });
+  });
+
+  it.each([
+    [{ reason: 'BORED' }, 'reason', 'Cancellation reason must be one of: CHANGED_MIND, WAIT_TOO_LONG, BOOKED_BY_MISTAKE, OTHER'],
+    [{ reason: 'OTHER', note: 42 }, 'note', 'Note must be text'],
+    [{ reason: 'OTHER', note: 'x'.repeat(501) }, 'note', 'Note must be at most 500 characters'],
+  ])('400: %j', async (body, field, message) => {
+    const { passenger, tripId } = await booked();
+    const res = await cancel(passenger.token, tripId, body).expect(400);
+    expect(res.body.error.details).toEqual([{ field, message }]);
+  });
+
+  it('a failed validation leaves the trip REQUESTED', async () => {
+    const { passenger, tripId } = await booked();
+    await cancel(passenger.token, tripId, {}).expect(400);
+    const [row] = await ctx.db.query('SELECT status FROM trips');
+    expect(row.status).toBe('REQUESTED');
+  });
+
+  it("404: another Passenger's trip, and it stays REQUESTED", async () => {
+    const { tripId } = await booked();
+    const stranger = await signUpPassenger(ctx);
+    const res = await cancel(stranger.token, tripId).expect(404);
+    expect(res.body.message).toBe('Trip not found');
+    const [row] = await ctx.db.query('SELECT status FROM trips');
+    expect(row.status).toBe('REQUESTED');
+  });
+
+  it.each(['3f6c1b2a-8d4e-4f0a-9b1c-2e7d5a9c4f11', 'not-a-uuid'])('404: unknown or malformed id %s', async (id) => {
+    const passenger = await signUpPassenger(ctx);
+    await cancel(passenger.token, id).expect(404);
+  });
+
+  it('403: a Driver cannot cancel, even a trip they accepted', async () => {
+    const { tripId } = await booked();
+    const driver = await signUpDriver(ctx);
+    await assignDriver(tripId, driver.user.id, 'ACCEPTED');
+    const res = await cancel(driver.token, tripId).expect(403);
+    expect(res.body).toEqual(FORBIDDEN);
+  });
+
+  it('401: no token', async () => {
+    const { tripId } = await booked();
+    await ctx.http().post(`/api/trips/${tripId}/cancel`).send({ reason: 'OTHER' }).expect(401);
+  });
+});
