@@ -51,4 +51,12 @@ export class DriverTripsController {
   markArrived(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
     return this.driverTrips.markArrived(caller, tripId);
   }
+
+  /** operationId: startTrip */
+  @Post(':tripId/start')
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Trip started')
+  startTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
+    return this.driverTrips.start(caller, tripId);
+  }
 }

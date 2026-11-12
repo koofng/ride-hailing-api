@@ -115,6 +115,11 @@ export class DriverTripsService {
     return this.advance(caller, tripId, TripStatus.ACCEPTED, TripStatus.DRIVER_ARRIVED, 'arrivedAt');
   }
 
+  /** DRIVER_ARRIVED -> IN_PROGRESS: the Passenger is in the car. */
+  start(caller: AuthUser, tripId: string): Promise<TripResponse> {
+    return this.advance(caller, tripId, TripStatus.DRIVER_ARRIVED, TripStatus.IN_PROGRESS, 'startedAt');
+  }
+
   /**
    * Moves the caller's own trip one step along the status flow and stamps the
    * time. A conditional UPDATE, so a step cannot be skipped or repeated even

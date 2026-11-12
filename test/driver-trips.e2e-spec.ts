@@ -523,3 +523,48 @@ describe('POST /api/trips/:tripId/arrive', () => {
     await ctx.http().post(`/api/trips/${tripId}/arrive`).expect(401);
   });
 });
+
+// ------------------------------------------------------------------ startTrip
+describe('POST /api/trips/:tripId/start', () => {
+  const start = (token: string, id: string) =>
+    ctx.http().post(`/api/trips/${id}/start`).set(bearer(token));
+
+  it('200: DRIVER_ARRIVED -> IN_PROGRESS with startedAt', async () => {
+    const { driver, tripId } = await driverTripIn('DRIVER_ARRIVED');
+    const res = await start(driver.token, tripId).expect(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      message: 'Trip started',
+      data: { id: tripId, status: 'IN_PROGRESS', startedAt: expect.any(String), completedAt: null },
+    });
+  });
+
+  it('works after markArrived through the API', async () => {
+    const { driver, passenger, tripId } = await driverTripIn('ACCEPTED');
+    await ctx.http().post(`/api/trips/${tripId}/arrive`).set(bearer(driver.token)).expect(200);
+    await start(driver.token, tripId).expect(200);
+    const { body } = await ctx.http().get('/api/trips/active').set(bearer(passenger.token)).expect(200);
+    expect(body.data.status).toBe('IN_PROGRESS');
+  });
+
+  it.each(['ACCEPTED', 'IN_PROGRESS', 'COMPLETED'])('409: trip is %s (cannot skip or repeat a step)', async (status) => {
+    const { driver, tripId } = await driverTripIn(status);
+    expect((await start(driver.token, tripId).expect(409)).body).toEqual(INVALID_TRANSITION);
+  });
+
+  it("404: another Driver's trip", async () => {
+    const { tripId } = await driverTripIn('DRIVER_ARRIVED');
+    const other = await signUpDriver(ctx);
+    await start(other.token, tripId).expect(404);
+  });
+
+  it('403: the Passenger cannot start the trip', async () => {
+    const { passenger, tripId } = await driverTripIn('DRIVER_ARRIVED');
+    expect((await start(passenger.token, tripId).expect(403)).body).toEqual(FORBIDDEN);
+  });
+
+  it('401: no token', async () => {
+    const { tripId } = await driverTripIn('DRIVER_ARRIVED');
+    await ctx.http().post(`/api/trips/${tripId}/start`).expect(401);
+  });
+});
