@@ -554,7 +554,8 @@ paths:
         A Passenger can have only one active trip (`REQUESTED`, `ACCEPTED`, `DRIVER_ARRIVED`
         or `IN_PROGRESS`); booking again returns 409 until it is `COMPLETED` or `CANCELLED`.
         The service area is a 10 km radius around the Antigonish town centre
-        (45.6169, -61.9986).
+        (45.6169, -61.9986). The request stays open to Drivers for 2 minutes
+        (`TRIP_REQUEST_TTL_SECONDS`); after that it is cancelled with `NO_DRIVER_FOUND`.
       requestBody:
         required: true
         content:
@@ -768,7 +769,30 @@ paths:
       tags: [Driver Trips]
       operationId: listTripRequests
       summary: Pending trip requests sent to this Driver (Driver only)
-      description: Fallback for when a `trip:request` event or push notification was missed.
+      description: |
+        Fallback for when a `trip:request` event or push notification was missed.
+        Returns open requests that have not expired and that this Driver has not declined,
+        nearest pickup first (at most 50). A Driver on an active trip gets an empty list.
+        Until live location arrives over WebSockets, the Driver sends their position as
+        `lat` and `lng`, used for `distanceKm`. Online status is not enforced yet: any
+        Driver without an active trip sees open requests.
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+        - name: lng
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
       responses:
         '200':
           description: Pending requests that have not expired
@@ -783,6 +807,8 @@ paths:
                         type: array
                         items:
                           $ref: '#/components/schemas/TripRequest'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -797,7 +823,9 @@ paths:
       summary: Accept a trip request (Driver only)
       description: |
         Moves the trip from `REQUESTED` to `ACCEPTED`. Once accepted, the trip cannot be
-        cancelled by either side. The Passenger gets `trip:accepted`.
+        cancelled by either side. The Passenger gets `trip:accepted`. When several Drivers
+        accept at once, exactly one wins. The response is the full `Trip`, so the Driver now
+        sees the Passenger's details and the destination.
       responses:
         '200':
           description: Trip accepted
@@ -818,8 +846,9 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: |
-            The trip is no longer `REQUESTED` (another Driver accepted it, or the Passenger
-            cancelled), or this Driver already has an active trip
+            The trip is no longer available (another Driver accepted it, the Passenger
+            cancelled, the request expired, or this Driver declined it), or this Driver
+            already has an active trip
           content:
             application/json:
               schema:
@@ -849,7 +878,9 @@ paths:
       tags: [Driver Trips]
       operationId: declineTrip
       summary: Decline a trip request (Driver only)
-      description: The request is removed for this Driver; the trip stays open for other Drivers.
+      description: |
+        The request is removed for this Driver, who can no longer accept it; the trip stays
+        open for other Drivers. Declining the same request twice is harmless.
       responses:
         '200':
           description: Request declined (`data` is null)
@@ -864,7 +895,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: The trip is no longer `REQUESTED`
+          description: The trip is no longer `REQUESTED`, or the request has expired
           content:
             application/json:
               schema:
@@ -883,7 +914,9 @@ paths:
       tags: [Driver Trips]
       operationId: markArrived
       summary: Mark arrival at the pickup location (Driver only)
-      description: Moves the trip from `ACCEPTED` to `DRIVER_ARRIVED`. The Passenger gets `trip:arrived`.
+      description: |
+        Moves the trip from `ACCEPTED` to `DRIVER_ARRIVED`. The Passenger gets `trip:arrived`.
+        Only the Driver on the trip can do this; anyone else gets 404.
       responses:
         '200':
           description: Arrival recorded
@@ -912,7 +945,9 @@ paths:
       tags: [Driver Trips]
       operationId: startTrip
       summary: Start the trip once the Passenger is in the car (Driver only)
-      description: Moves the trip from `DRIVER_ARRIVED` to `IN_PROGRESS`. The Passenger gets `trip:started`.
+      description: |
+        Moves the trip from `DRIVER_ARRIVED` to `IN_PROGRESS`. The Passenger gets `trip:started`.
+        Only the Driver on the trip can do this; anyone else gets 404.
       responses:
         '200':
           description: Trip started
@@ -944,6 +979,7 @@ paths:
       description: |
         Moves the trip from `IN_PROGRESS` to `COMPLETED`. The Passenger gets
         `trip:completed` with the fare, and the Driver can receive new requests again.
+        Only the Driver on the trip can do this; anyone else gets 404.
       responses:
         '200':
           description: Trip completed
@@ -1621,7 +1657,8 @@ components:
           example: 1.8
         passengerName:
           type: string
-          example: Jane Doe
+          description: First name only. The full name, phone and photo are shown once the Driver accepts.
+          example: Jane
         expiresAt:
           type: string
           format: date-time

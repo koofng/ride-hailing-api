@@ -4,8 +4,9 @@ NestJS 12 + PostgreSQL 17 + TypeORM backend for the API contract in
 [`ride-hailing-api.yaml`](ride-hailing-api.yaml).
 
 **Status: stage 2 in progress.** Project setup, database, the `User` model,
-the four `Auth` endpoints, the three `Profile` endpoints and the five
-Passenger `Trips` endpoints. Every other endpoint in the spec returns 404 for now.
+the four `Auth` endpoints, the three `Profile` endpoints, the five Passenger
+`Trips` endpoints and the six `Driver Trips` endpoints. The `Drivers` and
+`Fares` endpoints and the WebSocket events are not built yet.
 
 | Endpoint | Auth | Notes |
 |---|---|---|
@@ -22,6 +23,12 @@ Passenger `Trips` endpoints. Every other endpoint in the spec returns 404 for no
 | `GET /api/trips/active` | Passenger or Driver | `data: null` when there is none |
 | `GET /api/trips/:tripId` | Passenger or Driver on the trip | 404 for anyone else |
 | `POST /api/trips/:tripId/cancel` | Passenger | only while `REQUESTED`; `{ reason, note? }` |
+| `GET /api/trips/requests` | Driver | `?lat=&lng=` (Driver's position); nearest first |
+| `POST /api/trips/:tripId/accept` | Driver | first Driver wins; one active trip per Driver |
+| `POST /api/trips/:tripId/decline` | Driver | hides the request from this Driver |
+| `POST /api/trips/:tripId/arrive` | Driver on the trip | `ACCEPTED` → `DRIVER_ARRIVED` |
+| `POST /api/trips/:tripId/start` | Driver on the trip | `DRIVER_ARRIVED` → `IN_PROGRESS` |
+| `POST /api/trips/:tripId/complete` | Driver on the trip | `IN_PROGRESS` → `COMPLETED` |
 
 ## Running it
 
@@ -113,6 +120,15 @@ test/                                    e2e tests (Vitest + Supertest)
   fare (fixed 8.00 CAD) is stored on each trip. The service area is a 10 km
   radius around the town centre (`src/trips/pricing.ts`). Cancelling is a
   single conditional update, so it cannot race a Driver accepting.
+- **Trip requests.** A request is open for `TRIP_REQUEST_TTL_SECONDS`
+  (default 120). Listing and accepting check the expiry directly; a background
+  sweep every `TRIP_EXPIRY_SWEEP_SECONDS` (default 10, 0 = off) cancels expired
+  trips with `NO_DRIVER_FOUND`. Before accepting, a Driver sees only the pickup,
+  the distance and the Passenger's first name. Declines are stored in
+  `trip_declines`.
+- **Trip status steps.** Accept, arrive, start and complete are each one
+  conditional `UPDATE` on the expected status (and Driver), so steps cannot be
+  skipped or repeated and concurrent requests cannot both succeed.
 - **Trip visibility.** `toTripView()` builds every trip response for the
   viewer: the Passenger never sees the Driver on a cancelled trip; the Driver
   sees the Passenger only while the trip is active or completed, and never the
@@ -124,6 +140,8 @@ test/                                    e2e tests (Vitest + Supertest)
 
 - `deviceToken` in the logout body is validated but not used yet, because push
   tokens are not registered until push notifications are built.
-- Trip dispatch: `trip:request` to Drivers and the `NO_DRIVER_FOUND` timeout
-  come with the Driver trip endpoints and WebSockets. Until then a booked trip
-  stays `REQUESTED` until the Passenger cancels it.
+- Real-time events and push notifications (`trip:request`, `trip:accepted`,
+  ...). Drivers find requests through `GET /api/trips/requests` for now, and
+  send their position with it until live location exists.
+- Driver online status: `PATCH /drivers/me/availability` is not built, so any
+  Driver without an active trip can see and accept requests.
