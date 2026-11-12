@@ -24,14 +24,14 @@ export class ProfileService {
   ) {}
 
   async getProfile(userId: string): Promise<UserProfileResponse> {
-    return toUserProfile(await this.loadUser(userId));
+    return this.toProfile(await this.loadUser(userId));
   }
 
   async updateProfile(userId: string, dto: UpdateProfileDto): Promise<UserProfileResponse> {
     const user = await this.loadUser(userId);
     await this.users.updateFullName(user.id, dto.fullName);
     user.fullName = dto.fullName;
-    return toUserProfile(user);
+    return this.toProfile(user);
   }
 
   /**
@@ -48,26 +48,27 @@ export class ProfileService {
     }
 
     const user = await this.loadUser(userId);
-    const oldPhotoUrl = user.photoUrl;
+    const oldKey = user.photoKey;
 
     const key = await this.storage.save(result.file.buffer, result.file.type, 'public', 'photos');
-    const photoUrl = this.storage.publicUrl(key);
     try {
-      await this.users.updatePhotoUrl(user.id, photoUrl);
+      await this.users.updatePhotoKey(user.id, key);
     } catch (error) {
       await this.storage.remove([key]);
       throw error;
     }
-    user.photoUrl = photoUrl;
+    user.photoKey = key;
 
-    await this.removeOldPhoto(oldPhotoUrl);
-    return toUserProfile(user);
+    if (oldKey) await this.removeOldPhoto(oldKey);
+    return this.toProfile(user);
+  }
+
+  private toProfile(user: User): UserProfileResponse {
+    return toUserProfile(user, (key) => this.storage.signedPhotoUrl(key));
   }
 
   /** The new photo is already saved, so a failed cleanup must not fail the request. */
-  private async removeOldPhoto(photoUrl: string | null): Promise<void> {
-    const key = photoUrl ? this.storage.keyFromPublicUrl(photoUrl) : null;
-    if (!key) return;
+  private async removeOldPhoto(key: string): Promise<void> {
     try {
       await this.storage.remove([key]);
     } catch (error) {

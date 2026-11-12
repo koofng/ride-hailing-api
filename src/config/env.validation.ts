@@ -15,6 +15,7 @@ export interface AppEnv {
   BCRYPT_ROUNDS: number;
   UPLOAD_DIR: string;
   PUBLIC_BASE_URL: string;
+  FILE_URL_TTL_SECONDS: number;
 }
 
 export function validateEnv(raw: Record<string, unknown>): AppEnv {
@@ -55,6 +56,7 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
       /\/+$/,
       '',
     ),
+    FILE_URL_TTL_SECONDS: int('FILE_URL_TTL_SECONDS', 900, 60, 86_400),
   };
 
   if (env.JWT_SECRET && env.JWT_SECRET.length < 32) {

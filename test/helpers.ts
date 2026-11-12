@@ -100,3 +100,13 @@ export function registerDriver(
 
 export const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A signed, expiring profile photo link, as returned in `photoUrl`. */
+export const SIGNED_PHOTO_URL =
+  /^http:\/\/localhost:3000\/api\/files\/photos\/[0-9a-f-]{36}\.(jpg|png)\?expires=\d+&sig=[A-Za-z0-9_-]{43}$/;
+
+/** The path and query of a URL, for requesting it through supertest. */
+export const pathOf = (url: string): string => {
+  const u = new URL(url);
+  return u.pathname + u.search;
+};

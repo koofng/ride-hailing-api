@@ -9,8 +9,10 @@ import {
   JPEG,
   listUploads,
   passengerBody,
+  pathOf,
   registerDriver,
   resetDatabase,
+  SIGNED_PHOTO_URL,
   UUID,
   type TestContext,
 } from './helpers.js';
@@ -173,7 +175,7 @@ describe('POST /api/auth/register/driver', () => {
           fullName: 'John Smith',
           email: 'john@example.com',
           phone: '+19025559876',
-          photoUrl: expect.stringMatching(/^http:\/\/localhost:3000\/uploads\/photos\/[0-9a-f-]+\.png$/),
+          photoUrl: expect.stringMatching(SIGNED_PHOTO_URL),
           createdAt: expect.stringMatching(ISO_DATE),
           driverDetails: {
             licenceNumber: 'NS1234567',
@@ -185,10 +187,11 @@ describe('POST /api/auth/register/driver', () => {
     });
   });
 
-  it('serves the profile photo publicly but not the licence or insurance documents', async () => {
+  it('serves the profile photo only through its signed link, and never the documents', async () => {
     const { body } = await registerDriver(ctx).expect(201);
-    const photoPath = new URL(body.data.user.photoUrl).pathname;
-    await ctx.http().get(photoPath).expect(200).expect('Content-Type', /image\/png/);
+    const { photoUrl } = body.data.user;
+    await ctx.http().get(pathOf(photoUrl)).expect(200).expect('Content-Type', /image\/png/);
+    await ctx.http().get(new URL(photoUrl).pathname).expect(403);
 
     const [row] = await ctx.db.query(
       'SELECT licence_image_key, insurance_document_key FROM driver_details',

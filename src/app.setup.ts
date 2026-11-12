@@ -1,5 +1,4 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { StorageService } from './storage/storage.service.js';
 
 /**
  * App-level settings shared by `main.ts` and the e2e tests, so tests run
@@ -9,14 +8,8 @@ export function configureApp(app: NestExpressApplication): void {
   // Matches the spec's server URLs: http://localhost:3000/api
   app.setGlobalPrefix('api');
 
-  // Public uploads (profile photos). Driver documents are stored outside
-  // this directory and are never served.
-  app.useStaticAssets(app.get(StorageService).publicDir, {
-    prefix: '/uploads/',
-    index: false,
-    dotfiles: 'deny',
-    fallthrough: true,
-  });
+  // Uploads are never served as static files. Profile photos are reached
+  // only through signed links (see FilesController).
 
   app.disable('x-powered-by');
   app.enableShutdownHooks();

@@ -5,10 +5,12 @@ import {
   JPEG,
   listUploads,
   passengerBody,
+  pathOf,
   PDF,
   PNG,
   registerDriver,
   resetDatabase,
+  SIGNED_PHOTO_URL,
   UUID,
   type TestContext,
 } from './helpers.js';
@@ -225,7 +227,7 @@ describe('PUT /api/users/me/photo', () => {
   };
   const jpeg = { buffer: JPEG, filename: 'me.jpg', contentType: 'image/jpeg' };
   const png = { buffer: PNG, filename: 'me.png', contentType: 'image/png' };
-  const PHOTO_URL = /^http:\/\/localhost:3000\/uploads\/photos\/[0-9a-f-]+\.(jpg|png)$/;
+  const photoPath = (url: string) => new URL(url).pathname;
 
   it('200: Passenger adds a first photo and gets the updated profile', async () => {
     const { token, user } = await signUpPassenger();
@@ -235,31 +237,30 @@ describe('PUT /api/users/me/photo', () => {
     expect(res.body).toEqual({
       success: true,
       message: 'Profile photo updated successfully',
-      data: { ...user, photoUrl: expect.stringMatching(PHOTO_URL) },
+      data: { ...user, photoUrl: expect.stringMatching(SIGNED_PHOTO_URL) },
     });
-    expect(res.body.data.photoUrl).toMatch(/\.jpg$/);
+    expect(photoPath(res.body.data.photoUrl)).toMatch(/\.jpg$/);
   });
 
-  it('serves the new photo publicly and persists the URL', async () => {
+  it('serves the new photo through its signed link and persists it', async () => {
     const { token } = await signUpPassenger();
     const res = await putPhoto(token, png).expect(200);
     const { photoUrl } = res.body.data;
 
-    await ctx.http().get(new URL(photoUrl).pathname).expect(200).expect('Content-Type', /image\/png/);
+    await ctx.http().get(pathOf(photoUrl)).expect(200).expect('Content-Type', /image\/png/);
     const me = await ctx.http().get('/api/users/me').set('Authorization', `Bearer ${token}`);
-    expect(me.body.data.photoUrl).toBe(photoUrl);
+    expect(photoPath(me.body.data.photoUrl)).toBe(photoPath(photoUrl));
   });
 
   it('200: Driver replaces their photo; the old file is deleted', async () => {
     const { token, user } = await signUpDriver();
-    const oldPath = new URL(user.photoUrl).pathname;
-    await ctx.http().get(oldPath).expect(200);
+    await ctx.http().get(pathOf(user.photoUrl)).expect(200);
 
     const res = await putPhoto(token, jpeg).expect(200);
-    expect(res.body.data).toEqual({ ...user, photoUrl: expect.stringMatching(PHOTO_URL) });
-    expect(res.body.data.photoUrl).not.toBe(user.photoUrl);
+    expect(res.body.data).toEqual({ ...user, photoUrl: expect.stringMatching(SIGNED_PHOTO_URL) });
+    expect(photoPath(res.body.data.photoUrl)).not.toBe(photoPath(user.photoUrl));
 
-    await ctx.http().get(oldPath).expect(404);
+    await ctx.http().get(pathOf(user.photoUrl)).expect(403);
     expect(await listUploads('public')).toHaveLength(1);
   });
 
@@ -321,7 +322,7 @@ describe('PUT /api/users/me/photo', () => {
 
     expect(await listUploads('public')).toEqual(before);
     const me = await ctx.http().get('/api/users/me').set('Authorization', `Bearer ${token}`);
-    expect(me.body.data.photoUrl).toBe(user.photoUrl);
+    expect(photoPath(me.body.data.photoUrl)).toBe(photoPath(user.photoUrl));
   });
 
   it('401: no token, and nothing is written', async () => {
