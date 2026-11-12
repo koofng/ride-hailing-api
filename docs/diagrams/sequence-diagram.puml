@@ -1,0 +1,94 @@
+@startuml sequence-diagram
+title Antigonish Ride-Hailing: a ride from booking to completion (sequence diagram)
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam maxMessageSize 260
+skinparam sequence {
+  ArrowColor #444444
+  LifeLineBorderColor #888888
+  ParticipantBorderColor #555555
+  ParticipantBackgroundColor #FDFDFD
+  GroupBorderColor #888888
+  GroupBackgroundColor #F7F7F7
+}
+autonumber "<b>0."
+
+actor "Passenger app" as P
+participant "API\n(NestJS REST)" as API
+participant "Realtime gateway\n(Socket.IO)" as WS
+database "PostgreSQL" as DB
+actor "Driver app" as D
+actor "Other Drivers" as O
+
+== Before the ride ==
+D -> API : PATCH /drivers/me/availability\n{ available: true, lat, lng }
+API -> DB : driver online + position
+API --> D : 200 "You are now online"
+D -> WS : connect (auth: { token })
+P -> WS : connect (auth: { token })
+WS -> WS : verify JWT, join room user:<id>\n(Drivers also join "drivers")
+
+loop every few seconds while online
+  D -> WS : driver:location { lat, lng, heading }
+  WS -> DB : store position
+  WS --> D : ack { accepted: true }
+end
+
+== Booking ==
+P -> API : POST /fares/quote { origin, destination }
+API --> P : 200 { fare: 8.00 CAD, withinServiceArea: true }
+P -> API : POST /trips { origin, destination }
+API -> DB : insert trip (REQUESTED)\none active trip per Passenger
+API --> P : 201 Trip (REQUESTED)
+API -> WS : TripEvents: requested
+WS -> D : trip:request { pickup, distanceKm, passengerName, expiresAt }
+WS -> O : trip:request (online Drivers not on a trip)
+
+alt No Driver accepts within 2 minutes
+  API -> DB : expiry sweep: CANCELLED (NO_DRIVER_FOUND)
+  API -> WS : TripEvents: expired
+  WS -> P : trip:no_driver { tripId }
+  WS -> D : trip:withdrawn { reason: EXPIRED }
+  WS -> O : trip:withdrawn { reason: EXPIRED }
+else The Driver accepts
+  D -> API : POST /trips/{id}/accept
+  API -> DB : UPDATE ... WHERE status = REQUESTED\n(first Driver wins)
+  API --> D : 200 Trip (ACCEPTED, Passenger details)
+  API -> WS : TripEvents: accepted
+  WS -> P : trip:accepted { driver, vehicle, etaSeconds }
+  WS -> O : trip:withdrawn { reason: ACCEPTED_BY_ANOTHER_DRIVER }
+
+  == To the pickup ==
+  loop while driving to the pickup
+    D -> WS : driver:location { lat, lng, heading }
+    WS -> DB : store position
+    WS -> P : driver:location { lat, lng, etaSeconds to pickup }
+  end
+  D -> API : POST /trips/{id}/arrive
+  API -> DB : DRIVER_ARRIVED, arrivedAt
+  API --> D : 200 Trip
+  WS -> P : trip:arrived { status, at }
+
+  == The ride ==
+  D -> API : POST /trips/{id}/start
+  API -> DB : IN_PROGRESS, startedAt
+  API --> D : 200 Trip
+  WS -> P : trip:started { status, at }
+  loop while driving to the destination
+    D -> WS : driver:location { lat, lng, heading }
+    WS -> P : driver:location { lat, lng, etaSeconds to destination }
+  end
+  D -> API : POST /trips/{id}/complete
+  API -> DB : COMPLETED, completedAt
+  API --> D : 200 Trip (fare)
+  WS -> P : trip:completed { fare: 8.00 CAD, completedAt }
+end
+
+note over P, D
+  REST stays the source of truth: after (re)connecting, apps re-fetch
+  GET /trips/active (Drivers also GET /trips/requests).
+end note
+@enduml

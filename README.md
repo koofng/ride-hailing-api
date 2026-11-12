@@ -33,6 +33,42 @@ events). Push notifications are not built yet.
 | `POST /api/trips/:tripId/start` | Driver on the trip | `DRIVER_ARRIVED` → `IN_PROGRESS` |
 | `POST /api/trips/:tripId/complete` | Driver on the trip | `IN_PROGRESS` → `COMPLETED` |
 
+## Diagrams
+
+UML diagrams of the system. The sources are PlantUML files in
+[`docs/diagrams/`](docs/diagrams), next to the rendered images.
+
+### Use case diagram
+
+What each kind of user can do: visitors register and log in, Passengers and
+Drivers share account and trip-history features, and each role has its own
+trip actions. A system timer expires requests nobody accepts.
+
+![Use case diagram](docs/diagrams/use-case-diagram.png)
+
+### Class diagram
+
+The domain model stored in PostgreSQL (entities, enums and their
+relationships), and the NestJS services with their main operations and
+dependencies, including the pluggable file storage and the real-time layer.
+
+![Class diagram](docs/diagrams/class-diagram.png)
+
+### Sequence diagram
+
+One ride from start to finish: the Driver goes online, the Passenger gets a
+quote and books, Drivers receive the request, and then either nobody accepts
+(the request expires) or a Driver accepts and drives the trip to completion.
+It shows which steps are REST calls and which are WebSocket events.
+
+![Sequence diagram](docs/diagrams/sequence-diagram.png)
+
+To change a diagram, edit its `.puml` file and render it again:
+
+```bash
+docker run --rm -v "$PWD/docs/diagrams:/data" plantuml/plantuml:1.2024.8 -tpng -Sdpi=110 /data
+```
+
 ## Running it
 
 Requires Docker. Node 24 is needed only to run outside Docker or to run tests.

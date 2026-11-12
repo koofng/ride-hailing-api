@@ -1,0 +1,255 @@
+@startuml class-diagram
+title Antigonish Ride-Hailing API: class diagram
+
+skinparam backgroundColor white
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam linetype ortho
+skinparam nodesep 40
+skinparam ranksep 60
+skinparam class {
+  BackgroundColor #FDFDFD
+  BorderColor #555555
+  ArrowColor #555555
+}
+skinparam package {
+  BorderColor #888888
+  FontStyle bold
+}
+hide empty members
+
+package "Domain model (PostgreSQL)" #F3F8FF {
+  enum Role {
+    PASSENGER
+    DRIVER
+  }
+
+  enum TripStatus {
+    REQUESTED
+    ACCEPTED
+    DRIVER_ARRIVED
+    IN_PROGRESS
+    COMPLETED
+    CANCELLED
+  }
+
+  enum CancelReason {
+    PASSENGER_CANCELLED
+    NO_DRIVER_FOUND
+  }
+
+  enum PassengerCancelReason {
+    CHANGED_MIND
+    WAIT_TOO_LONG
+    BOOKED_BY_MISTAKE
+    OTHER
+  }
+
+  class User <<entity>> {
+    + id : uuid
+    + role : Role
+    + fullName : string
+    + email : string
+    + phone : string
+    - passwordHash : string
+    + photoKey : string?
+    + createdAt : Date
+    + updatedAt : Date
+  }
+
+  class DriverDetails <<entity>> {
+    + userId : uuid
+    + licenceNumber : string
+    - licenceImageKey : string
+    - insuranceDocumentKey : string
+    + vehicleMake : string
+    + vehicleModel : string
+    + vehicleColour : string
+    + plateNumber : string
+    + available : boolean
+    + lastLat : number?
+    + lastLng : number?
+    + locationUpdatedAt : Date?
+  }
+
+  class Trip <<entity>> {
+    + id : uuid
+    + passengerId : uuid
+    + driverId : uuid?
+    + status : TripStatus
+    + originLat / originLng : number
+    + originAddress : string?
+    + destinationLat / destinationLng : number
+    + destinationAddress : string?
+    + fareAmount : number
+    + fareCurrency : string
+    + cancelReason : CancelReason?
+    + passengerCancelReason : PassengerCancelReason?
+    + cancelNote : string?
+    + requestedAt : Date
+    + acceptedAt : Date?
+    + arrivedAt : Date?
+    + startedAt : Date?
+    + completedAt : Date?
+    + cancelledAt : Date?
+  }
+
+  class TripDecline <<entity>> {
+    + tripId : uuid
+    + driverId : uuid
+    + declinedAt : Date
+  }
+
+  class RevokedToken <<entity>> {
+    + jti : uuid
+    + userId : uuid
+    + expiresAt : Date
+  }
+
+  User "1" *-- "0..1" DriverDetails : Drivers only
+  Trip "0..*" -up- "1" User : passenger
+  Trip "0..*" -up- "0..1" User : driver
+  Trip "1" *-- "0..*" TripDecline
+  User "1" -- "0..*" RevokedToken
+  User ..> Role
+  Trip ..> TripStatus
+  Trip ..> CancelReason
+  Trip ..> PassengerCancelReason
+}
+
+package "Services (NestJS)" #FFFBF0 {
+  class AuthService {
+    + registerPassenger(dto) : AuthResponse
+    + registerDriver(fields, files) : AuthResponse
+    + login(dto) : AuthResponse
+    + logout(caller) : void
+  }
+
+  class TokenService {
+    + issue(userId, role) : string
+    + verify(token) : AuthUser?
+    + revoke(user) : void
+    + onRevoked(listener) : void
+  }
+
+  class UsersService {
+    + findById(id) : User?
+    + createPassenger(data) : User
+    + createDriver(data, details) : User
+    + updateFullName(userId, name) : void
+    + updatePhotoKey(userId, key) : void
+    + setDriverAvailability(userId, available) : void
+  }
+
+  class ProfileService {
+    + getProfile(userId) : UserProfile
+    + updateProfile(userId, dto) : UserProfile
+    + updatePhoto(userId, file) : UserProfile
+  }
+
+  class DriversService {
+    + setAvailability(caller, dto) : Availability
+    + recordLocation(driverId, at) : void
+    + listActive(center, radiusKm) : ActiveDriver[]
+    + listDispatchCandidates() : Candidate[]
+  }
+
+  class FaresService {
+    + quote(origin, destination) : FareQuote
+  }
+
+  class TripsService {
+    + create(caller, dto) : Trip
+    + list(caller, query) : TripPage
+    + findActive(caller) : Trip?
+    + findOne(caller, tripId) : Trip
+    + cancel(caller, tripId, dto) : Trip
+  }
+
+  class DriverTripsService {
+    + listRequests(caller, from) : TripRequest[]
+    + accept(caller, tripId) : Trip
+    + decline(caller, tripId) : void
+    + markArrived(caller, tripId) : Trip
+    + start(caller, tripId) : Trip
+    + complete(caller, tripId) : Trip
+  }
+
+  class TripExpiryService {
+    + ttlSeconds : number
+    + expiresAt(requestedAt) : Date
+    + expireStaleRequests() : string[]
+  }
+
+  class TripEvents {
+    + publish(event : TripEvent) : void
+    + subscribe(listener) : unsubscribe
+  }
+
+  class StorageService {
+    + save(buffer, type, visibility, folder) : key
+    + signedPhotoUrl(key) : string
+    + openSignedPhoto(name, expires, sig) : StoredFile?
+    + remove(keys) : void
+    + ping() : void
+  }
+
+  interface FileStore {
+    + init() : void
+    + put(key, data, contentType) : void
+    + open(key) : StoredFile?
+    + delete(keys) : void
+    + ping() : void
+    + close() : void
+  }
+
+  class DiskFileStore
+  class GridFsFileStore
+
+  class RealtimeGateway <<Socket.IO>> {
+    + onDriverLocation(socket, body) : Ack
+    + toUser(userId, event, payload) : void
+    + toDrivers(event, payload, except?) : void
+  }
+
+  class TripNotifier {
+    - handle(event : TripEvent) : void
+  }
+
+  class DriverLocationRelay {
+    + update(driverId, location) : Forward?
+  }
+
+  AuthService --> UsersService
+  AuthService --> TokenService
+  AuthService --> StorageService
+  ProfileService --> UsersService
+  ProfileService --> StorageService
+  DriversService --> UsersService
+  TripsService --> FaresService
+  TripsService --> TripEvents : publishes
+  TripsService --> StorageService
+  DriverTripsService --> DriversService
+  DriverTripsService --> TripExpiryService
+  DriverTripsService --> TripEvents : publishes
+  DriverTripsService --> StorageService
+  TripExpiryService --> TripEvents : publishes
+  StorageService --> FileStore
+  FileStore <|.. DiskFileStore
+  FileStore <|.. GridFsFileStore
+  TripNotifier --> TripEvents : subscribes
+  TripNotifier --> RealtimeGateway : sends events
+  TripNotifier --> DriversService
+  RealtimeGateway --> TokenService : authenticates
+  RealtimeGateway --> DriverLocationRelay
+  DriverLocationRelay --> DriversService
+}
+
+
+legend bottom left
+  Services read and write the entities through TypeORM repositories.
+  Storage: DiskFileStore (local) or GridFsFileStore (MongoDB Atlas, STORAGE_DRIVER=gridfs).
+  Private (-) fields such as passwordHash and document keys are never returned by the API.
+endlegend
+@enduml

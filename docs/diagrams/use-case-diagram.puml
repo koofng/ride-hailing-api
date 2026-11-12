@@ -1,0 +1,102 @@
+@startuml use-case-diagram
+title Antigonish Ride-Hailing: use case diagram
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam packageStyle rectangle
+skinparam actorStyle awesome
+skinparam usecase {
+  BackgroundColor #FDFDFD
+  BorderColor #555555
+  ArrowColor #555555
+}
+left to right direction
+
+actor "Visitor" as A_Visitor
+actor "User" as A_User
+actor "Passenger" as A_Passenger
+actor "Driver" as A_Driver
+actor "System timer" as A_Timer <<system>>
+
+A_User <|-- A_Passenger
+A_User <|-- A_Driver
+
+rectangle "Ride-hailing API" {
+  package "Account (everyone)" {
+    usecase "Register as Passenger" as UC_RegP
+    usecase "Register as Driver\n(licence, insurance, photo)" as UC_RegD
+    usecase "Log in" as UC_Login
+    usecase "Log out" as UC_Logout
+    usecase "View profile" as UC_Profile
+    usecase "Update full name" as UC_Name
+    usecase "Upload profile photo" as UC_Photo
+  }
+
+  package "Trips (Passengers and Drivers)" {
+    usecase "View trip history" as UC_History
+    usecase "View trip details" as UC_Details
+    usecase "View active trip" as UC_Active
+    usecase "Receive live trip updates\n(WebSocket)" as UC_Live
+  }
+
+  package "Passenger use cases" {
+    usecase "Get fare quote" as UC_Quote
+    usecase "See nearby Drivers\non the map" as UC_Nearby
+    usecase "Book a trip" as UC_Book
+    usecase "Check service area" as UC_Area
+    usecase "Cancel a trip" as UC_Cancel
+    usecase "Give cancellation reason" as UC_Reason
+    usecase "Follow Driver live\n(position and ETA)" as UC_Follow
+  }
+
+  package "Driver use cases" {
+    usecase "Go online / offline" as UC_Online
+    usecase "Share live location" as UC_Location
+    usecase "Receive trip requests" as UC_Requests
+    usecase "Accept a request" as UC_Accept
+    usecase "Decline a request" as UC_Decline
+    usecase "Mark arrived at pickup" as UC_Arrive
+    usecase "Start the trip" as UC_Start
+    usecase "Complete the trip" as UC_Complete
+  }
+
+  usecase "Expire unanswered requests\n(NO_DRIVER_FOUND after 2 min)" as UC_Expire
+}
+
+A_Visitor --> UC_RegP
+A_Visitor --> UC_RegD
+A_Visitor --> UC_Login
+
+A_User --> UC_Logout
+A_User --> UC_Profile
+A_User --> UC_Name
+A_User --> UC_Photo
+A_User --> UC_History
+A_User --> UC_Details
+A_User --> UC_Active
+A_User --> UC_Live
+
+A_Passenger --> UC_Quote
+A_Passenger --> UC_Nearby
+A_Passenger --> UC_Book
+A_Passenger --> UC_Cancel
+A_Passenger --> UC_Follow
+
+A_Driver --> UC_Online
+A_Driver --> UC_Location
+A_Driver --> UC_Requests
+A_Driver --> UC_Accept
+A_Driver --> UC_Decline
+A_Driver --> UC_Arrive
+A_Driver --> UC_Start
+A_Driver --> UC_Complete
+
+UC_Book ..> UC_Area : <<include>>
+UC_Quote ..> UC_Area : <<include>>
+UC_Cancel ..> UC_Reason : <<include>>
+UC_Follow ..> UC_Live : <<extend>>
+UC_Online ..> UC_Location : <<include>>
+
+A_Timer --> UC_Expire
+
+@enduml
