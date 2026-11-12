@@ -67,6 +67,10 @@ export class UsersService {
     });
   }
 
+  async updateFullName(userId: string, fullName: string): Promise<void> {
+    await this.users.update({ id: userId }, { fullName });
+  }
+
   async setDriverAvailability(userId: string, available: boolean): Promise<void> {
     await this.driverDetails.update({ userId }, { available });
   }

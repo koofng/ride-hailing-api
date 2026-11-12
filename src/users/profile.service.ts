@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import type { UpdateProfileDto } from './dto/update-profile.dto.js';
 import type { User } from './entities/user.entity.js';
 import { toUserProfile, type UserProfileResponse } from './user-profile.js';
 import { UsersService } from './users.service.js';
@@ -10,6 +11,13 @@ export class ProfileService {
 
   async getProfile(userId: string): Promise<UserProfileResponse> {
     return toUserProfile(await this.loadUser(userId));
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto): Promise<UserProfileResponse> {
+    const user = await this.loadUser(userId);
+    await this.users.updateFullName(user.id, dto.fullName);
+    user.fullName = dto.fullName;
+    return toUserProfile(user);
   }
 
   /**

@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsNotEmpty, IsString, Length, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsFullName } from '../../users/dto/full-name.validator.js';
 
 const trim = () =>
   Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
@@ -12,10 +13,7 @@ const E164 = /^\+[1-9]\d{7,14}$/;
 
 /** Spec: `PassengerRegistrationRequest`. Also the shared part of Driver registration. */
 export class PassengerRegistrationDto {
-  @trim()
-  @IsNotEmpty({ message: 'Full name is required' })
-  @IsString({ message: 'Full name must be text' })
-  @Length(2, 100, { message: 'Full name must be between 2 and 100 characters' })
+  @IsFullName()
   fullName: string;
 
   @trimLower()

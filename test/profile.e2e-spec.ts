@@ -119,3 +119,90 @@ describe('GET /api/users/me', () => {
     expect(res.body).toEqual(UNAUTHORIZED);
   });
 });
+
+// ------------------------------------------------------------------ updateMyProfile
+describe('PATCH /api/users/me', () => {
+  const patchMe = (token: string | undefined, body: object) => {
+    const req = ctx.http().patch('/api/users/me');
+    if (token) req.set('Authorization', `Bearer ${token}`);
+    return req.send(body);
+  };
+
+  it('200: updates the full name and returns the updated profile', async () => {
+    const { token, user } = await signUpPassenger();
+    const res = await patchMe(token, { fullName: 'Jane Q. Doe' }).expect(200);
+
+    expect(res.body).toEqual({
+      success: true,
+      message: 'Profile updated successfully',
+      data: { ...user, fullName: 'Jane Q. Doe' },
+    });
+  });
+
+  it('persists the change', async () => {
+    const { token } = await signUpPassenger();
+    await patchMe(token, { fullName: 'Jane Q. Doe' }).expect(200);
+    const res = await ctx.http().get('/api/users/me').set('Authorization', `Bearer ${token}`);
+    expect(res.body.data.fullName).toBe('Jane Q. Doe');
+  });
+
+  it('200: Driver keeps their driverDetails', async () => {
+    const { token, user } = await signUpDriver();
+    const res = await patchMe(token, { fullName: 'Johnny Smith' }).expect(200);
+    expect(res.body.data).toEqual({ ...user, fullName: 'Johnny Smith' });
+  });
+
+  it('trims the full name', async () => {
+    const { token } = await signUpPassenger();
+    const res = await patchMe(token, { fullName: '  Jane Q. Doe  ' }).expect(200);
+    expect(res.body.data.fullName).toBe('Jane Q. Doe');
+  });
+
+  it('ignores fields that cannot be changed here (email, phone, role)', async () => {
+    const { token, user } = await signUpPassenger();
+    const res = await patchMe(token, {
+      fullName: 'Jane Q. Doe',
+      email: 'hacker@example.com',
+      phone: '+19025550000',
+      role: 'DRIVER',
+    }).expect(200);
+    expect(res.body.data).toEqual({ ...user, fullName: 'Jane Q. Doe' });
+  });
+
+  it('400: fullName is required', async () => {
+    const { token } = await signUpPassenger();
+    const res = await patchMe(token, {}).expect(400);
+    expect(res.body).toEqual({
+      success: false,
+      message: 'Request failed validation',
+      error: {
+        statusCode: 400,
+        status: 'Bad Request',
+        details: [{ field: 'fullName', message: 'Full name is required' }],
+      },
+    });
+  });
+
+  it.each([
+    ['J', 'Full name must be between 2 and 100 characters'],
+    ['x'.repeat(101), 'Full name must be between 2 and 100 characters'],
+    ['   ', 'Full name is required'],
+    [42, 'Full name must be text'],
+  ])('400: fullName = %j', async (fullName, message) => {
+    const { token } = await signUpPassenger();
+    const res = await patchMe(token, { fullName }).expect(400);
+    expect(res.body.error.details).toEqual([{ field: 'fullName', message }]);
+  });
+
+  it('does not change anything when validation fails', async () => {
+    const { token } = await signUpPassenger();
+    await patchMe(token, { fullName: 'J' }).expect(400);
+    const [row] = await ctx.db.query('SELECT full_name FROM users');
+    expect(row.full_name).toBe('Jane Doe');
+  });
+
+  it('401: no token', async () => {
+    const res = await patchMe(undefined, { fullName: 'Jane Q. Doe' }).expect(401);
+    expect(res.body).toEqual(UNAUTHORIZED);
+  });
+});
