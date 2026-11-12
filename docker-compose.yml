@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-ride_hailing}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ride_hailing}
+      POSTGRES_DB: ${DB_NAME:-ride_hailing}
+    ports:
+      # Exposed on localhost so `npm run start:dev` and the e2e tests can reach it.
+      - '127.0.0.1:${DB_PORT:-5433}:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      # Creates the separate `ride_hailing_test` database on first start.
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Inside the compose network the database host is the service name.
+      DB_HOST: db
+      DB_PORT: 5432
+      UPLOAD_DIR: /app/uploads
+    ports:
+      - '${PORT:-3000}:3000'
+    volumes:
+      - uploads:/app/uploads
+
+volumes:
+  db-data:
+  uploads:

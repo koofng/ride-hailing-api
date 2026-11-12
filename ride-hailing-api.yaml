@@ -1,0 +1,1598 @@
+openapi: 3.0.3
+
+info:
+  title: Antigonish Ride-Hailing API
+  version: 1.0.0
+  description: |
+    REST API for the Antigonish ride-hailing app (graduate software engineering project).
+
+    **Actors:** Passenger and Driver. Every endpoint except registration and login
+    requires a JWT (`Authorization: Bearer <token>`). The server checks the caller's
+    role on each endpoint and returns `403 Forbidden` on a mismatch.
+
+    **Response format:** every response is a JSON envelope.
+    Success: `{ "success": true, "message": "...", "data": <payload> }` (`data` is `null` when
+    there is nothing to return). Error: `{ "success": false, "message": "...", "error":
+    { "statusCode", "status", "details"? } }`. The schemas below describe the `data` payload.
+
+    **Scope decisions**
+    - Fixed fare of 8.00 CAD for any trip within the Antigonish service area.
+    - No in-app payment: the app only displays the fare.
+    - No ratings or reviews.
+    - A Passenger can cancel a trip only while it is `REQUESTED`.
+    - A Driver cannot cancel a trip once they have accepted it (there is no Driver cancel endpoint).
+
+    **Trip status flow**
+    ```
+    REQUESTED --accept--> ACCEPTED --arrive--> DRIVER_ARRIVED --start--> IN_PROGRESS --complete--> COMPLETED
+        |
+        +--cancel (Passenger) / no Driver accepts--> CANCELLED
+    ```
+
+    **Dispatch rule:** when a trip is booked, the server sends a `trip:request` event only to
+    Drivers who are available AND have no active trip. The first Driver to accept wins; every
+    other Driver who received the request gets `trip:withdrawn`.
+
+    **Real-time events (WebSocket)**
+
+    OpenAPI cannot describe WebSocket messages, so they are listed here. Their payload schemas
+    are defined under `components/schemas` (names ending in `Event`) so code generators still
+    produce models for them. Connect with the same JWT used for REST
+    (Socket.IO for NestJS, or STOMP over WebSocket for Spring Boot).
+
+    | Direction          | Event             | Payload schema              |
+    |--------------------|-------------------|-----------------------------|
+    | Driver -> Server   | `driver:location` | `DriverLocationUpdate`      |
+    | Server -> Driver   | `trip:request`    | `TripRequest`               |
+    | Server -> Driver   | `trip:withdrawn`  | `TripWithdrawnEvent`        |
+    | Server -> Passenger| `trip:accepted`   | `TripAcceptedEvent`         |
+    | Server -> Passenger| `driver:location` | `DriverLocationEvent`       |
+    | Server -> Passenger| `trip:arrived`    | `TripStatusEvent`           |
+    | Server -> Passenger| `trip:started`    | `TripStatusEvent`           |
+    | Server -> Passenger| `trip:completed`  | `TripCompletedEvent`        |
+    | Server -> Passenger| `trip:no_driver`  | `TripNoDriverEvent`         |
+
+    `trip:request` and the Passenger status events should also be sent as push notifications
+    (e.g. Firebase Cloud Messaging), because a WebSocket only delivers while the app is open.
+
+servers:
+  - url: http://localhost:3000/api
+    description: Local NestJS server
+  - url: http://localhost:8080/api
+    description: Local Spring Boot server
+
+tags:
+  - name: Auth
+    description: Registration, login and logout
+  - name: Profile
+    description: The signed-in user's own profile (Passenger or Driver)
+  - name: Drivers
+    description: Driver availability and active Drivers on the map
+  - name: Fares
+    description: Fare quote before booking
+  - name: Trips
+    description: Booking, cancelling and viewing trips
+  - name: Driver Trips
+    description: Trip actions performed by a Driver
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------------------------------------------------------------- Auth
+  /auth/register/passenger:
+    post:
+      tags: [Auth]
+      operationId: registerPassenger
+      summary: Create a Passenger account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PassengerRegistrationRequest'
+      responses:
+        '201':
+          description: Passenger account created; the user is signed in
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthResponse'
+              examples:
+                passenger:
+                  $ref: '#/components/examples/PassengerAuth'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email or phone number already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: An account with this email or phone number already exists
+                error:
+                  statusCode: 409
+                  status: Conflict
+
+  /auth/register/driver:
+    post:
+      tags: [Auth]
+      operationId: registerDriver
+      summary: Create a Driver account with onboarding details
+      description: |
+        Multipart form because the Driver uploads their licence image, insurance document
+        and photo along with the account and vehicle details.
+      security: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/DriverRegistrationRequest'
+            encoding:
+              licenceImage:
+                contentType: image/jpeg, image/png, application/pdf
+              insuranceDocument:
+                contentType: image/jpeg, image/png, application/pdf
+              photo:
+                contentType: image/jpeg, image/png
+      responses:
+        '201':
+          description: Driver account created; the user is signed in
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthResponse'
+              examples:
+                driver:
+                  $ref: '#/components/examples/DriverAuth'
+        '400':
+          description: A required field or document is missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: Driver registration failed validation
+                error:
+                  statusCode: 400
+                  status: Bad Request
+                  details:
+                    - field: insuranceDocument
+                      message: Proof of insurance is required
+                    - field: plateNumber
+                      message: Plate number is required
+        '409':
+          description: Email, phone number or plate number already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: An account with this email, phone number or plate number already exists
+                error:
+                  statusCode: 409
+                  status: Conflict
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Log in as a Passenger or Driver
+      description: |
+        One login endpoint for both roles, because the app does not know the user's role
+        before they sign in. The response shape depends on the account's role: check
+        `user.role` (`PASSENGER` or `DRIVER`) to decide which home screen to open.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in. `user.driverDetails` is filled in for Drivers and null for Passengers.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthResponse'
+              examples:
+                passenger:
+                  $ref: '#/components/examples/PassengerAuth'
+                driver:
+                  $ref: '#/components/examples/DriverAuth'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Wrong email or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: Incorrect email or password
+                error:
+                  statusCode: 401
+                  status: Unauthorized
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Log out and stop push notifications to this device
+      description: |
+        Invalidates the current token and removes the device's push token.
+        A Driver who logs out is also marked unavailable.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogoutRequest'
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        nullable: true
+                        description: Always null
+              example:
+                success: true
+                message: Logged out successfully
+                data: null
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---------------------------------------------------------------- Profile
+  /users/me:
+    get:
+      tags: [Profile]
+      operationId: getMyProfile
+      summary: Get the signed-in user's profile
+      description: |
+        For Drivers, `driverDetails` holds the licence number, vehicle and availability.
+        For Passengers, `driverDetails` is null.
+      responses:
+        '200':
+          description: The profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Profile]
+      operationId: updateMyProfile
+      summary: Update profile details (full name)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /users/me/photo:
+    put:
+      tags: [Profile]
+      operationId: uploadMyPhoto
+      summary: Upload or replace the profile picture
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [photo]
+              properties:
+                photo:
+                  type: string
+                  format: binary
+            encoding:
+              photo:
+                contentType: image/jpeg, image/png
+      responses:
+        '200':
+          description: Updated profile with the new photo URL
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/UserProfile'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ---------------------------------------------------------------- Drivers
+  /drivers/me/availability:
+    patch:
+      tags: [Drivers]
+      operationId: setMyAvailability
+      summary: Go online or offline (Driver only)
+      description: |
+        An available Driver with no active trip receives `trip:request` events.
+        A Driver cannot go offline while they have an active trip.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AvailabilityRequest'
+      responses:
+        '200':
+          description: Availability updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AvailabilityResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Cannot go offline during an active trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: You cannot go offline while you have an active trip
+                error:
+                  statusCode: 409
+                  status: Conflict
+
+  /drivers/active:
+    get:
+      tags: [Drivers]
+      operationId: listActiveDrivers
+      summary: List online Drivers near a location (Passenger only)
+      description: Used to show active Drivers on the Passenger's map.
+      parameters:
+        - name: lat
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -90
+            maximum: 90
+        - name: lng
+          in: query
+          required: true
+          schema:
+            type: number
+            format: double
+            minimum: -180
+            maximum: 180
+        - name: radiusKm
+          in: query
+          required: false
+          schema:
+            type: number
+            format: double
+            default: 5
+            minimum: 0.1
+            maximum: 20
+      responses:
+        '200':
+          description: Active Drivers within the radius
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ActiveDriver'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ---------------------------------------------------------------- Fares
+  /fares/quote:
+    post:
+      tags: [Fares]
+      operationId: quoteFare
+      summary: Get the fare before confirming a booking (Passenger only)
+      description: |
+        Returns the fixed fare (8.00 CAD) and whether both points are inside the
+        Antigonish service area. The fare is defined only on the server.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FareQuoteRequest'
+      responses:
+        '200':
+          description: The fare quote
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/FareQuote'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ---------------------------------------------------------------- Trips
+  /trips:
+    post:
+      tags: [Trips]
+      operationId: createTrip
+      summary: Book a ride (Passenger only)
+      description: |
+        Creates a trip with status `REQUESTED` and sends `trip:request` to available
+        Drivers with no active trip. If no Driver accepts in time, the trip becomes
+        `CANCELLED` with reason `NO_DRIVER_FOUND` and the Passenger gets `trip:no_driver`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTripRequest'
+      responses:
+        '201':
+          description: Trip created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The Passenger already has an active trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: You already have an active trip
+                error:
+                  statusCode: 409
+                  status: Conflict
+        '422':
+          description: Origin or destination is outside the Antigonish service area
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: Pickup or destination is outside the Antigonish service area
+                error:
+                  statusCode: 422
+                  status: Unprocessable Entity
+    get:
+      tags: [Trips]
+      operationId: listTrips
+      summary: Trip history for the signed-in user
+      description: Passengers see trips they booked; Drivers see trips they accepted.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Filter by one or more statuses, e.g. `status=COMPLETED,CANCELLED`
+          style: form
+          explode: false
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/TripStatus'
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: A page of trips, newest first
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TripPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /trips/active:
+    get:
+      tags: [Trips]
+      operationId: getActiveTrip
+      summary: Get the signed-in user's current trip, if any
+      description: Called when the app opens, to restore the screen for a trip in progress.
+      responses:
+        '200':
+          description: 'The active trip, or `data: null` if there is no active trip'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        allOf:
+                          - $ref: '#/components/schemas/Trip'
+                        nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /trips/{tripId}:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    get:
+      tags: [Trips]
+      operationId: getTrip
+      summary: Get a trip's details
+      description: Only the Passenger or Driver on the trip can view it.
+      responses:
+        '200':
+          description: The trip
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /trips/{tripId}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    post:
+      tags: [Trips]
+      operationId: cancelTrip
+      summary: Cancel a booked trip (Passenger only, before a Driver accepts)
+      description: |
+        Allowed only while the trip is `REQUESTED`. Drivers who received the request
+        get `trip:withdrawn`.
+      responses:
+        '200':
+          description: Trip cancelled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: A Driver has already accepted the trip, so it can no longer be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: A Driver has already accepted this trip, so it can no longer be cancelled
+                error:
+                  statusCode: 409
+                  status: Conflict
+
+  # ---------------------------------------------------------------- Driver trips
+  /trips/requests:
+    get:
+      tags: [Driver Trips]
+      operationId: listTripRequests
+      summary: Pending trip requests sent to this Driver (Driver only)
+      description: Fallback for when a `trip:request` event or push notification was missed.
+      responses:
+        '200':
+          description: Pending requests that have not expired
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/TripRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /trips/{tripId}/accept:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    post:
+      tags: [Driver Trips]
+      operationId: acceptTrip
+      summary: Accept a trip request (Driver only)
+      description: |
+        Moves the trip from `REQUESTED` to `ACCEPTED`. Once accepted, the trip cannot be
+        cancelled by either side. The Passenger gets `trip:accepted`.
+      responses:
+        '200':
+          description: Trip accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: |
+            The trip is no longer `REQUESTED` (another Driver accepted it, or the Passenger
+            cancelled), or this Driver already has an active trip
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                noLongerAvailable:
+                  summary: Another Driver accepted it, or the Passenger cancelled
+                  value:
+                    success: false
+                    message: This trip is no longer available
+                    error:
+                      statusCode: 409
+                      status: Conflict
+                driverBusy:
+                  summary: The Driver already has an active trip
+                  value:
+                    success: false
+                    message: Complete your current trip before accepting a new one
+                    error:
+                      statusCode: 409
+                      status: Conflict
+
+  /trips/{tripId}/decline:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    post:
+      tags: [Driver Trips]
+      operationId: declineTrip
+      summary: Decline a trip request (Driver only)
+      description: The request is removed for this Driver; the trip stays open for other Drivers.
+      responses:
+        '200':
+          description: Request declined (`data` is null)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: The trip is no longer `REQUESTED`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: This trip is no longer available
+                error:
+                  statusCode: 409
+                  status: Conflict
+
+  /trips/{tripId}/arrive:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    post:
+      tags: [Driver Trips]
+      operationId: markArrived
+      summary: Mark arrival at the pickup location (Driver only)
+      description: Moves the trip from `ACCEPTED` to `DRIVER_ARRIVED`. The Passenger gets `trip:arrived`.
+      responses:
+        '200':
+          description: Arrival recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+  /trips/{tripId}/start:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    post:
+      tags: [Driver Trips]
+      operationId: startTrip
+      summary: Start the trip once the Passenger is in the car (Driver only)
+      description: Moves the trip from `DRIVER_ARRIVED` to `IN_PROGRESS`. The Passenger gets `trip:started`.
+      responses:
+        '200':
+          description: Trip started
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+  /trips/{tripId}/complete:
+    parameters:
+      - $ref: '#/components/parameters/TripId'
+    post:
+      tags: [Driver Trips]
+      operationId: completeTrip
+      summary: Complete the trip at the destination (Driver only)
+      description: |
+        Moves the trip from `IN_PROGRESS` to `COMPLETED`. The Passenger gets
+        `trip:completed` with the fare, and the Driver can receive new requests again.
+      responses:
+        '200':
+          description: Trip completed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Trip'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/InvalidTransition'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TripId:
+      name: tripId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: The request body or parameters failed validation
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: Request failed validation
+            error:
+              statusCode: 400
+              status: Bad Request
+              details:
+                - field: email
+                  message: Must be a valid email address
+    Unauthorized:
+      description: Missing, invalid or expired token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: Missing or expired access token
+            error:
+              statusCode: 401
+              status: Unauthorized
+    Forbidden:
+      description: The signed-in user's role is not allowed to do this
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: Your account role is not allowed to perform this action
+            error:
+              statusCode: 403
+              status: Forbidden
+    NotFound:
+      description: The trip does not exist
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: Trip not found
+            error:
+              statusCode: 404
+              status: Not Found
+    InvalidTransition:
+      description: The trip is not in the status this action requires
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            success: false
+            message: This action is not allowed in the trip's current status
+            error:
+              statusCode: 409
+              status: Conflict
+
+  examples:
+    PassengerAuth:
+      summary: Passenger account
+      value:
+        success: true
+        message: Logged in successfully
+        data:
+          accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+          tokenType: Bearer
+          expiresIn: 86400
+          user:
+            id: 3f6c1b2a-8d4e-4f0a-9b1c-2e7d5a9c4f11
+            role: PASSENGER
+            fullName: Jane Doe
+            email: jane@example.com
+            phone: '+19025551234'
+            photoUrl: null
+            createdAt: '2026-11-01T14:20:00Z'
+            driverDetails: null
+    DriverAuth:
+      summary: Driver account
+      value:
+        success: true
+        message: Logged in successfully
+        data:
+          accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+          tokenType: Bearer
+          expiresIn: 86400
+          user:
+            id: 9a2e4c7d-1b3f-4e8a-a6d2-5c0f8b1e3a77
+            role: DRIVER
+            fullName: John Smith
+            email: john@example.com
+            phone: '+19025559876'
+            photoUrl: https://cdn.example.com/photos/john.jpg
+            createdAt: '2026-10-28T09:05:00Z'
+            driverDetails:
+              licenceNumber: NS1234567
+              vehicle:
+                make: Toyota
+                model: Corolla
+                colour: Silver
+                plateNumber: ABC 123
+              available: false
+
+  schemas:
+    # ------------------------------------------------------------ Common
+    SuccessResponse:
+      type: object
+      description: |
+        Envelope for every successful response. The endpoint's payload is in `data`
+        (`null` when there is nothing to return).
+      required: [success, message, data]
+      properties:
+        success:
+          type: boolean
+          enum: [true]
+        message:
+          type: string
+          description: Human-readable summary the app can show to the user
+          example: Logged in successfully
+        data:
+          type: object
+          nullable: true
+          description: The endpoint's payload (overridden per endpoint)
+
+    ErrorResponse:
+      type: object
+      description: Envelope for every error response
+      required: [success, message, error]
+      properties:
+        success:
+          type: boolean
+          enum: [false]
+        message:
+          type: string
+          description: Human-readable explanation the app can show to the user
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+
+    ErrorDetail:
+      type: object
+      required: [statusCode, status]
+      properties:
+        statusCode:
+          type: integer
+          description: HTTP status code
+        status:
+          type: string
+          description: HTTP status name, e.g. `Bad Request`
+        details:
+          type: array
+          description: Field-level validation errors, if any
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    LatLng:
+      type: object
+      required: [lat, lng]
+      properties:
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: 45.6169
+        lng:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: -61.9986
+
+    Role:
+      type: string
+      enum: [PASSENGER, DRIVER]
+
+    Place:
+      type: object
+      required: [lat, lng]
+      properties:
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          example: 45.6169
+        lng:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          example: -61.9986
+        address:
+          type: string
+          description: Human-readable address shown in the app
+          example: 1 West St, Antigonish, NS
+
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: number
+          format: double
+          example: 8.00
+        currency:
+          type: string
+          example: CAD
+
+    Vehicle:
+      type: object
+      required: [make, model, colour, plateNumber]
+      properties:
+        make:
+          type: string
+          example: Toyota
+        model:
+          type: string
+          example: Corolla
+        colour:
+          type: string
+          example: Silver
+        plateNumber:
+          type: string
+          example: ABC 123
+
+    # ------------------------------------------------------------ Auth
+    PassengerRegistrationRequest:
+      type: object
+      required: [fullName, email, phone, password]
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          example: '+19025551234'
+        password:
+          type: string
+          format: password
+          minLength: 8
+
+    DriverRegistrationRequest:
+      type: object
+      required:
+        - fullName
+        - email
+        - phone
+        - password
+        - licenceNumber
+        - licenceImage
+        - vehicleMake
+        - vehicleModel
+        - vehicleColour
+        - plateNumber
+        - insuranceDocument
+        - photo
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          example: '+19025551234'
+        password:
+          type: string
+          format: password
+          minLength: 8
+        licenceNumber:
+          type: string
+        licenceImage:
+          type: string
+          format: binary
+          description: Photo or scan of the driver's licence
+        vehicleMake:
+          type: string
+        vehicleModel:
+          type: string
+        vehicleColour:
+          type: string
+        plateNumber:
+          type: string
+        insuranceDocument:
+          type: string
+          format: binary
+          description: Proof of vehicle insurance
+        photo:
+          type: string
+          format: binary
+          description: Driver's profile photo
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    LogoutRequest:
+      type: object
+      properties:
+        deviceToken:
+          type: string
+          description: Push notification token for this device, to be removed
+
+    AuthResponse:
+      type: object
+      description: Returned by both register endpoints and by login
+      required: [accessToken, tokenType, expiresIn, user]
+      properties:
+        accessToken:
+          type: string
+        tokenType:
+          type: string
+          example: Bearer
+        expiresIn:
+          type: integer
+          description: Seconds until the token expires
+          example: 86400
+        user:
+          $ref: '#/components/schemas/UserProfile'
+
+    # ------------------------------------------------------------ Profile
+    UserProfile:
+      type: object
+      description: |
+        One profile model for both roles. The fields shared by Passengers and Drivers are
+        at the top level; Driver-only information is grouped in `driverDetails`.
+      required: [id, role, fullName, email, phone, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          $ref: '#/components/schemas/Role'
+        fullName:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        driverDetails:
+          allOf:
+            - $ref: '#/components/schemas/DriverDetails'
+          nullable: true
+          description: |
+            Always present when `role` is `DRIVER`; always null when `role` is `PASSENGER`.
+            The server enforces this rule.
+
+    DriverDetails:
+      type: object
+      description: Driver-only information collected at onboarding
+      required: [licenceNumber, vehicle, available]
+      properties:
+        licenceNumber:
+          type: string
+          example: NS1234567
+        vehicle:
+          $ref: '#/components/schemas/Vehicle'
+        available:
+          type: boolean
+          description: Whether the Driver is online and can receive trip requests
+
+    UpdateProfileRequest:
+      type: object
+      required: [fullName]
+      properties:
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 100
+
+    # ------------------------------------------------------------ Drivers
+    AvailabilityRequest:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+
+    AvailabilityResponse:
+      type: object
+      required: [available]
+      properties:
+        available:
+          type: boolean
+
+    ActiveDriver:
+      type: object
+      description: Minimal data for showing a Driver on the Passenger's map
+      required: [driverId, location, lastUpdatedAt]
+      properties:
+        driverId:
+          type: string
+          format: uuid
+        location:
+          $ref: '#/components/schemas/LatLng'
+        lastUpdatedAt:
+          type: string
+          format: date-time
+
+    # ------------------------------------------------------------ Fares
+    FareQuoteRequest:
+      type: object
+      required: [origin, destination]
+      properties:
+        origin:
+          $ref: '#/components/schemas/Place'
+        destination:
+          $ref: '#/components/schemas/Place'
+
+    FareQuote:
+      type: object
+      required: [fare, withinServiceArea]
+      properties:
+        fare:
+          $ref: '#/components/schemas/Money'
+        withinServiceArea:
+          type: boolean
+          description: False if the origin or destination is outside Antigonish; such trips cannot be booked
+
+    # ------------------------------------------------------------ Trips
+    TripStatus:
+      type: string
+      enum: [REQUESTED, ACCEPTED, DRIVER_ARRIVED, IN_PROGRESS, COMPLETED, CANCELLED]
+
+    CancelReason:
+      type: string
+      enum: [PASSENGER_CANCELLED, NO_DRIVER_FOUND]
+
+    CreateTripRequest:
+      type: object
+      required: [origin, destination]
+      properties:
+        origin:
+          $ref: '#/components/schemas/Place'
+        destination:
+          $ref: '#/components/schemas/Place'
+
+    PassengerSummary:
+      type: object
+      required: [id, fullName]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        phone:
+          type: string
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+
+    DriverSummary:
+      type: object
+      required: [id, fullName, vehicle]
+      properties:
+        id:
+          type: string
+          format: uuid
+        fullName:
+          type: string
+        phone:
+          type: string
+        photoUrl:
+          type: string
+          format: uri
+          nullable: true
+        vehicle:
+          $ref: '#/components/schemas/Vehicle'
+
+    Trip:
+      type: object
+      required: [id, status, origin, destination, fare, passenger, requestedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/TripStatus'
+        origin:
+          $ref: '#/components/schemas/Place'
+        destination:
+          $ref: '#/components/schemas/Place'
+        fare:
+          $ref: '#/components/schemas/Money'
+        passenger:
+          $ref: '#/components/schemas/PassengerSummary'
+        driver:
+          allOf:
+            - $ref: '#/components/schemas/DriverSummary'
+          nullable: true
+          description: Null until a Driver accepts the trip
+        cancelReason:
+          allOf:
+            - $ref: '#/components/schemas/CancelReason'
+          nullable: true
+          description: Set only when `status` is `CANCELLED`
+        requestedAt:
+          type: string
+          format: date-time
+        acceptedAt:
+          type: string
+          format: date-time
+          nullable: true
+        arrivedAt:
+          type: string
+          format: date-time
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancelledAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    TripPage:
+      type: object
+      required: [items, page, size, totalItems]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Trip'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalItems:
+          type: integer
+
+    TripRequest:
+      type: object
+      description: |
+        What a Driver sees in the trip request alert. Also the payload of the
+        `trip:request` WebSocket event.
+      required: [tripId, pickup, distanceKm, passengerName, expiresAt]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        pickup:
+          $ref: '#/components/schemas/Place'
+        distanceKm:
+          type: number
+          format: double
+          description: Distance from the Driver's current location to the pickup
+          example: 1.8
+        passengerName:
+          type: string
+          example: Jane Doe
+        expiresAt:
+          type: string
+          format: date-time
+          description: After this time the request can no longer be accepted
+
+    # ------------------------------------------------------------ WebSocket event payloads
+    DriverLocationUpdate:
+      type: object
+      description: 'Driver -> Server `driver:location`: sent every few seconds while the Driver is available or on a trip'
+      required: [lat, lng]
+      properties:
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        heading:
+          type: number
+          format: double
+          description: Direction of travel in degrees (optional, for rotating the car icon)
+
+    TripWithdrawnEvent:
+      type: object
+      description: 'Server -> Driver `trip:withdrawn`: the request is no longer available'
+      required: [tripId, reason]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          enum: [PASSENGER_CANCELLED, ACCEPTED_BY_ANOTHER_DRIVER, EXPIRED]
+
+    TripAcceptedEvent:
+      type: object
+      description: 'Server -> Passenger `trip:accepted`'
+      required: [tripId, driver, etaSeconds]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        driver:
+          $ref: '#/components/schemas/DriverSummary'
+        etaSeconds:
+          type: integer
+          description: Estimated time for the Driver to reach the pickup
+
+    DriverLocationEvent:
+      type: object
+      description: 'Server -> Passenger `driver:location`: live Driver position and ETA during an active trip'
+      required: [tripId, lat, lng, etaSeconds]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        lat:
+          type: number
+          format: double
+        lng:
+          type: number
+          format: double
+        etaSeconds:
+          type: integer
+          description: Seconds to the pickup (before the trip starts) or to the destination (during the trip)
+
+    TripStatusEvent:
+      type: object
+      description: 'Server -> Passenger `trip:arrived` and `trip:started`'
+      required: [tripId, status, at]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/TripStatus'
+        at:
+          type: string
+          format: date-time
+
+    TripCompletedEvent:
+      type: object
+      description: 'Server -> Passenger `trip:completed`: shows the cost of the trip'
+      required: [tripId, fare, completedAt]
+      properties:
+        tripId:
+          type: string
+          format: uuid
+        fare:
+          $ref: '#/components/schemas/Money'
+        completedAt:
+          type: string
+          format: date-time
+
+    TripNoDriverEvent:
+      type: object
+      description: 'Server -> Passenger `trip:no_driver`: no Driver accepted in time; the trip is cancelled'
+      required: [tripId]
+      properties:
+        tripId:
+          type: string
+          format: uuid
