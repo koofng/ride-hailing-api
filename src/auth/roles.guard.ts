@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../common/decorators/roles.decorator.js';
 import type { Role } from '../users/role.enum.js';
-import type { AuthenticatedRequest } from './jwt-auth.guard.js';
+import { userFromContext } from './jwt-auth.guard.js';
 
 export const ROLE_FORBIDDEN = 'Your account role is not allowed to perform this action';
 
@@ -21,7 +21,7 @@ export class RolesGuard implements CanActivate {
     ]);
     if (!roles?.length) return true;
 
-    const { user } = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const user = userFromContext(context);
     if (!user || !roles.includes(user.role)) {
       throw new ForbiddenException(ROLE_FORBIDDEN);
     }

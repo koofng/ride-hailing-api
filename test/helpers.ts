@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { readdir, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { MongoClient } from 'mongodb';
+import { io, type Socket as ClientSocket } from 'socket.io-client';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module.js';
@@ -12,19 +13,30 @@ export interface TestContext {
   app: NestExpressApplication;
   http: () => ReturnType<typeof request>;
   db: DataSource;
+  /** Base URL when started with `listen: true`, e.g. http://127.0.0.1:54321 */
+  url: string;
 }
 
-/** Boots the real app (same module, filters, pipes and prefix as production). */
-export async function createTestApp(): Promise<TestContext> {
+/**
+ * Boots the real app (same module, filters, pipes and prefix as production).
+ * With `listen`, it also listens on a free local port and returns its URL,
+ * which WebSocket clients need.
+ */
+export async function createTestApp(options: { listen?: boolean } = {}): Promise<TestContext> {
   await rm(process.env.UPLOAD_DIR!, { recursive: true, force: true });
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
   const app = moduleRef.createNestApplication<NestExpressApplication>({ logger: false });
   configureApp(app);
-  await app.init();
+  if (options.listen) {
+    await app.listen(0, '127.0.0.1');
+  } else {
+    await app.init();
+  }
   return {
     app,
     http: () => request(app.getHttpServer()),
     db: app.get(DataSource),
+    url: options.listen ? await app.getUrl() : '',
   };
 }
 
@@ -186,3 +198,52 @@ export async function signUpDriver(
 }
 
 export const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+// ------------------------------------------------------------------ WebSockets
+
+/** Connects a Socket.IO client the way the mobile app would; rejects on refusal. */
+export function connectSocket(url: string, token?: string): Promise<ClientSocket> {
+  const socket = io(url, {
+    auth: token ? { token } : {},
+    transports: ['websocket'],
+    reconnection: false,
+    forceNew: true,
+  });
+  return new Promise((resolve, reject) => {
+    socket.once('connect', () => resolve(socket));
+    socket.once('connect_error', (error) => {
+      socket.close();
+      reject(error);
+    });
+  });
+}
+
+/** Resolves with the next `event` payload, or rejects after `timeoutMs`. */
+export function nextEvent<T = any>(socket: ClientSocket, event: string, timeoutMs = 2000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off(event, onEvent);
+      reject(new Error(`No "${event}" within ${timeoutMs} ms`));
+    }, timeoutMs);
+    const onEvent = (payload: T) => {
+      clearTimeout(timer);
+      resolve(payload);
+    };
+    socket.once(event, onEvent);
+  });
+}
+
+/** Resolves if no `event` arrives within `ms`; rejects with the payload if one does. */
+export function noEvent(socket: ClientSocket, event: string, ms = 300): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onEvent = (payload: unknown) => {
+      clearTimeout(timer);
+      reject(new Error(`Unexpected "${event}": ${JSON.stringify(payload)}`));
+    };
+    const timer = setTimeout(() => {
+      socket.off(event, onEvent);
+      resolve();
+    }, ms);
+    socket.once(event, onEvent);
+  });
+}

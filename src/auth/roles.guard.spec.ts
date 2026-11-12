@@ -18,6 +18,7 @@ const contextFor = (handler: keyof Handlers, role?: Role): ExecutionContext =>
   ({
     getHandler: () => Handlers.prototype[handler],
     getClass: () => Handlers,
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => ({ user: role ? { id: 'u1', role, jti: 'j', expiresAt: new Date() } : undefined }),
     }),
