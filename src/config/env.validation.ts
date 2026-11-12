@@ -19,6 +19,8 @@ export interface AppEnv {
   STORAGE_DRIVER: StorageDriver;
   /** Set only when STORAGE_DRIVER is gridfs. */
   MONGODB_URI: string | undefined;
+  TRIP_REQUEST_TTL_SECONDS: number;
+  TRIP_EXPIRY_SWEEP_SECONDS: number;
 }
 
 /** Where uploaded files are kept: local disk (default) or MongoDB GridFS. */
@@ -72,6 +74,8 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
     FILE_URL_TTL_SECONDS: int('FILE_URL_TTL_SECONDS', 900, 60, 86_400),
     STORAGE_DRIVER: storageDriver(raw.STORAGE_DRIVER, errors),
     MONGODB_URI: undefined,
+    TRIP_REQUEST_TTL_SECONDS: int('TRIP_REQUEST_TTL_SECONDS', 120, 30, 3600),
+    TRIP_EXPIRY_SWEEP_SECONDS: int('TRIP_EXPIRY_SWEEP_SECONDS', 10, 0, 300),
   };
 
   if (env.STORAGE_DRIVER === 'gridfs') {

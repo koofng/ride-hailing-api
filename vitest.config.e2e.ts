@@ -33,6 +33,9 @@ export default defineConfig({
       STORAGE_DRIVER: process.env.STORAGE_DRIVER ?? 'disk',
       MONGODB_URI: TEST_MONGODB_URI,
       TEST_MONGODB_URI,
+      TRIP_REQUEST_TTL_SECONDS: '120',
+      // Tests run the expiry check themselves, so a timer cannot change their data.
+      TRIP_EXPIRY_SWEEP_SECONDS: '0',
     },
   },
 });
