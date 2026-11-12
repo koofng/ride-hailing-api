@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { CurrentUser } from '../auth/jwt-auth.guard.js';
 import type { AuthUser } from '../auth/token.service.js';
 import { ResponseMessage } from '../common/decorators/response-message.decorator.js';
@@ -18,5 +18,12 @@ export class TripsController {
   @ResponseMessage('Trip requested successfully')
   createTrip(@CurrentUser() caller: AuthUser, @Body() dto: CreateTripDto): Promise<TripResponse> {
     return this.trips.create(caller, dto);
+  }
+
+  /** operationId: getTrip */
+  @Get(':tripId')
+  @ResponseMessage('Trip retrieved successfully')
+  getTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
+    return this.trips.findOne(caller, tripId);
   }
 }

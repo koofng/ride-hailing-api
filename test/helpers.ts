@@ -113,7 +113,13 @@ export const pathOf = (url: string): string => {
 
 export interface SignedUp {
   token: string;
-  user: { id: string; fullName: string; phone: string; photoUrl: string | null };
+  user: {
+    id: string;
+    fullName: string;
+    phone: string;
+    photoUrl: string | null;
+    driverDetails: { vehicle: { plateNumber: string } } | null;
+  };
 }
 
 let accounts = 0;
