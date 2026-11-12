@@ -547,9 +547,14 @@ paths:
       operationId: createTrip
       summary: Book a ride (Passenger only)
       description: |
-        Creates a trip with status `REQUESTED` and sends `trip:request` to available
-        Drivers with no active trip. If no Driver accepts in time, the trip becomes
-        `CANCELLED` with reason `NO_DRIVER_FOUND` and the Passenger gets `trip:no_driver`.
+        Creates a trip with status `REQUESTED` and the fixed fare, and sends `trip:request`
+        to available Drivers with no active trip. If no Driver accepts in time, the trip
+        becomes `CANCELLED` with reason `NO_DRIVER_FOUND` and the Passenger gets `trip:no_driver`.
+
+        A Passenger can have only one active trip (`REQUESTED`, `ACCEPTED`, `DRIVER_ARRIVED`
+        or `IN_PROGRESS`); booking again returns 409 until it is `COMPLETED` or `CANCELLED`.
+        The service area is a 10 km radius around the Antigonish town centre
+        (45.6169, -61.9986).
       requestBody:
         required: true
         content:
@@ -607,7 +612,9 @@ paths:
         - name: status
           in: query
           required: false
-          description: Filter by one or more statuses, e.g. `status=COMPLETED,CANCELLED`
+          description: |
+            Filter by one or more statuses, e.g. `status=COMPLETED,CANCELLED`.
+            `status=COMPLETED&status=CANCELLED` is also accepted.
           style: form
           explode: false
           schema:
@@ -641,6 +648,8 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/TripPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
 
@@ -649,7 +658,10 @@ paths:
       tags: [Trips]
       operationId: getActiveTrip
       summary: Get the signed-in user's current trip, if any
-      description: Called when the app opens, to restore the screen for a trip in progress.
+      description: |
+        Called when the app opens, to restore the screen for a trip in progress.
+        A Driver has no active trip until they accept one. When there is none,
+        `data` is null and `message` is "You have no active trip".
       responses:
         '200':
           description: 'The active trip, or `data: null` if there is no active trip'
@@ -675,7 +687,10 @@ paths:
       tags: [Trips]
       operationId: getTrip
       summary: Get a trip's details
-      description: Only the Passenger or Driver on the trip can view it.
+      description: |
+        Only the Passenger who booked the trip or the Driver who accepted it can view it.
+        Anyone else gets 404, the same as for a trip that does not exist, so trip IDs
+        cannot be probed. What each sees is described on the `Trip` schema.
       responses:
         '200':
           description: The trip
@@ -690,8 +705,6 @@ paths:
                         $ref: '#/components/schemas/Trip'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -703,8 +716,15 @@ paths:
       operationId: cancelTrip
       summary: Cancel a booked trip (Passenger only, before a Driver accepts)
       description: |
-        Allowed only while the trip is `REQUESTED`. Drivers who received the request
-        get `trip:withdrawn`.
+        Allowed only while the trip is `REQUESTED`, and a reason is required. The trip gets
+        `cancelReason: PASSENGER_CANCELLED` and the Passenger's reason in `cancelDetails`.
+        Drivers who received the request get `trip:withdrawn`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelTripRequest'
       responses:
         '200':
           description: Trip cancelled
@@ -717,6 +737,8 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/Trip'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -724,7 +746,11 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: A Driver has already accepted the trip, so it can no longer be cancelled
+          description: |
+            The trip is no longer `REQUESTED`: a Driver has accepted it ("A Driver has already
+            accepted this trip, so it can no longer be cancelled"), or it is already completed
+            ("This trip has already been completed") or cancelled ("This trip has already been
+            cancelled").
           content:
             application/json:
               schema:
@@ -1160,7 +1186,9 @@ components:
           example: -61.9986
         address:
           type: string
-          description: Human-readable address shown in the app
+          nullable: true
+          maxLength: 255
+          description: Human-readable address shown in the app. Optional; null in responses when not given.
           example: 1 West St, Antigonish, NS
 
     Money:
@@ -1421,6 +1449,32 @@ components:
       type: string
       enum: [PASSENGER_CANCELLED, NO_DRIVER_FOUND]
 
+    PassengerCancelReason:
+      type: string
+      enum: [CHANGED_MIND, WAIT_TOO_LONG, BOOKED_BY_MISTAKE, OTHER]
+      description: Why the Passenger cancelled, picked from a list in the app
+
+    CancelTripRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          $ref: '#/components/schemas/PassengerCancelReason'
+        note:
+          type: string
+          maxLength: 500
+          description: Optional extra detail, e.g. when the reason is `OTHER`
+
+    CancelDetails:
+      type: object
+      required: [reason, note]
+      properties:
+        reason:
+          $ref: '#/components/schemas/PassengerCancelReason'
+        note:
+          type: string
+          nullable: true
+
     CreateTripRequest:
       type: object
       required: [origin, destination]
@@ -1466,7 +1520,14 @@ components:
 
     Trip:
       type: object
-      required: [id, status, origin, destination, fare, passenger, requestedAt]
+      description: |
+        What each viewer sees:
+        - **Passenger** (who booked it): everything, including the fare and the Driver with
+          their vehicle, except `driver` is null once the trip is `CANCELLED`.
+        - **Driver** (who accepted it): `passenger` while the trip is `ACCEPTED`,
+          `DRIVER_ARRIVED`, `IN_PROGRESS` or `COMPLETED`; null when `CANCELLED`.
+          `cancelDetails` is always null for a Driver.
+      required: [id, status, origin, destination, fare, passenger, driver, cancelReason, cancelDetails, requestedAt]
       properties:
         id:
           type: string
@@ -1480,17 +1541,28 @@ components:
         fare:
           $ref: '#/components/schemas/Money'
         passenger:
-          $ref: '#/components/schemas/PassengerSummary'
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/PassengerSummary'
+          nullable: true
+          description: Null for a Driver viewing a cancelled trip
         driver:
+          type: object
           allOf:
             - $ref: '#/components/schemas/DriverSummary'
           nullable: true
-          description: Null until a Driver accepts the trip
+          description: Null until a Driver accepts the trip, and for the Passenger once it is cancelled
         cancelReason:
           allOf:
             - $ref: '#/components/schemas/CancelReason'
           nullable: true
           description: Set only when `status` is `CANCELLED`
+        cancelDetails:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/CancelDetails'
+          nullable: true
+          description: The Passenger's own reason, when they cancelled. Shown only to the Passenger.
         requestedAt:
           type: string
           format: date-time
