@@ -28,7 +28,7 @@ export async function createTestApp(): Promise<TestContext> {
 }
 
 export async function resetDatabase(db: DataSource): Promise<void> {
-  await db.query('TRUNCATE "revoked_tokens", "driver_details", "users" CASCADE');
+  await db.query('TRUNCATE "trips", "revoked_tokens", "driver_details", "users" CASCADE');
 }
 
 export async function clearUploads(): Promise<void> {
@@ -110,3 +110,44 @@ export const pathOf = (url: string): string => {
   const u = new URL(url);
   return u.pathname + u.search;
 };
+
+export interface SignedUp {
+  token: string;
+  user: { id: string; fullName: string; phone: string; photoUrl: string | null };
+}
+
+let accounts = 0;
+
+/** Registers a Passenger with a unique email and phone. */
+export async function signUpPassenger(
+  ctx: TestContext,
+  overrides: Record<string, unknown> = {},
+): Promise<SignedUp> {
+  const n = ++accounts;
+  const res = await ctx
+    .http()
+    .post('/api/auth/register/passenger')
+    .send(passengerBody({ email: `passenger${n}@example.com`, phone: `+1902555${String(n).padStart(4, '0')}`, ...overrides }))
+    .expect(201);
+  return { token: res.body.data.accessToken, user: res.body.data.user };
+}
+
+/** Registers a Driver with a unique email, phone and plate number. */
+export async function signUpDriver(
+  ctx: TestContext,
+  overrides: Record<string, string> = {},
+): Promise<SignedUp> {
+  const n = ++accounts;
+  const res = await registerDriver(
+    ctx,
+    driverFields({
+      email: `driver${n}@example.com`,
+      phone: `+1902666${String(n).padStart(4, '0')}`,
+      plateNumber: `DRV ${n}`,
+      ...overrides,
+    }),
+  ).expect(201);
+  return { token: res.body.data.accessToken, user: res.body.data.user };
+}
+
+export const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
