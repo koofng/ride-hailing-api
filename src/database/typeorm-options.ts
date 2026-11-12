@@ -6,6 +6,8 @@ import { User } from '../users/entities/user.entity.js';
 import { CreateUsersAndAuth1794355200000 } from './migrations/1794355200000-CreateUsersAndAuth.js';
 import { StorePhotoKeyInsteadOfUrl1794528000000 } from './migrations/1794528000000-StorePhotoKeyInsteadOfUrl.js';
 import { CreateTrips1794600000000 } from './migrations/1794600000000-CreateTrips.js';
+import { CreateTripDeclines1794700000000 } from './migrations/1794700000000-CreateTripDeclines.js';
+import { TripDecline } from '../trips/entities/trip-decline.entity.js';
 import { Trip } from '../trips/entities/trip.entity.js';
 
 /**
@@ -23,11 +25,12 @@ export function buildTypeOrmOptions(env: DbEnv): DataSourceOptions {
     username: env.DB_USER,
     password: env.DB_PASSWORD,
     database: env.DB_NAME,
-    entities: [User, DriverDetails, RevokedToken, Trip],
+    entities: [User, DriverDetails, RevokedToken, Trip, TripDecline],
     migrations: [
       CreateUsersAndAuth1794355200000,
       StorePhotoKeyInsteadOfUrl1794528000000,
       CreateTrips1794600000000,
+      CreateTripDeclines1794700000000,
     ],
     migrationsRun: true,
     synchronize: false,

@@ -5,6 +5,7 @@ import { In, Repository } from 'typeorm';
 import type { AuthUser } from '../auth/token.service.js';
 import { violatesConstraint } from '../common/errors/violates-constraint.js';
 import { StorageService } from '../storage/storage.service.js';
+import { TripDecline } from './entities/trip-decline.entity.js';
 import { Trip } from './entities/trip.entity.js';
 import type { Point } from './pricing.js';
 import { ACTIVE_STATUSES, TripStatus } from './trip.enums.js';
@@ -19,23 +20,32 @@ const MAX_REQUESTS = 50;
 export const NO_LONGER_AVAILABLE = 'This trip is no longer available';
 export const DRIVER_BUSY = 'Complete your current trip before accepting a new one';
 
+/** SQL condition: the trip in `tripColumn` was not declined by :driverId. */
+const notDeclinedBy = (tripColumn: string) =>
+  `NOT EXISTS (SELECT 1 FROM trip_declines d WHERE d.trip_id = ${tripColumn} AND d.driver_id = :driverId)`;
+
 /** Trip actions performed by a Driver (spec tag: Driver Trips). */
 @Injectable()
 export class DriverTripsService {
   constructor(
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
+    @InjectRepository(TripDecline) private readonly declines: Repository<TripDecline>,
     private readonly expiry: TripExpiryService,
     private readonly storage: StorageService,
   ) {}
 
   /**
-   * Open requests a Driver can accept, nearest pickup first. A Driver on an
-   * active trip gets none, because they cannot accept another.
+   * Open requests a Driver can accept, nearest pickup first, leaving out the
+   * ones they declined. A Driver on an active trip gets none, because they
+   * cannot accept another.
    */
   async listRequests(caller: AuthUser, from: Point): Promise<TripRequestResponse[]> {
     if (await this.hasActiveTrip(caller.id)) return [];
 
-    const open = await this.openRequests().leftJoinAndSelect('trip.passenger', 'passenger').getMany();
+    const open = await this.openRequests()
+      .andWhere(notDeclinedBy('trip.id'), { driverId: caller.id })
+      .leftJoinAndSelect('trip.passenger', 'passenger')
+      .getMany();
     return open
       .map((trip) => toTripRequest(trip, from, this.expiry.expiresAt(trip.requestedAt)))
       .sort((a, b) => a.distanceKm - b.distanceKm || a.expiresAt.localeCompare(b.expiresAt))
@@ -60,6 +70,7 @@ export class DriverTripsService {
         .set({ status: TripStatus.ACCEPTED, driverId: caller.id, acceptedAt: () => 'now()' })
         .where('id = :tripId AND status = :requested', { tripId, requested: TripStatus.REQUESTED })
         .andWhere('requested_at > now() - make_interval(secs => :ttl)', { ttl: this.expiry.ttlSeconds })
+        .andWhere(notDeclinedBy('trips.id'), { driverId: caller.id })
         .execute());
     } catch (error) {
       if (violatesConstraint(error, 'UQ_trips_driver_active')) throw new ConflictException(DRIVER_BUSY);
@@ -67,13 +78,34 @@ export class DriverTripsService {
     }
 
     if (!affected) {
-      // Taken by another Driver, cancelled, or expired.
+      // Taken by another Driver, cancelled, expired, or declined by this Driver.
       if (!(await this.trips.exists({ where: { id: tripId } }))) {
         throw new NotFoundException(TRIP_NOT_FOUND);
       }
       throw new ConflictException(NO_LONGER_AVAILABLE);
     }
     return this.view(tripId, caller);
+  }
+
+  /**
+   * Removes an open request from this Driver's list; the trip stays open for
+   * everyone else. Declining the same request twice is harmless.
+   */
+  async decline(caller: AuthUser, tripId: string): Promise<void> {
+    if (!isUUID(tripId)) throw new NotFoundException(TRIP_NOT_FOUND);
+    const isOpen = await this.openRequests().andWhere('trip.id = :tripId', { tripId }).getExists();
+    if (!isOpen) {
+      if (!(await this.trips.exists({ where: { id: tripId } }))) {
+        throw new NotFoundException(TRIP_NOT_FOUND);
+      }
+      throw new ConflictException(NO_LONGER_AVAILABLE);
+    }
+    await this.declines
+      .createQueryBuilder()
+      .insert()
+      .values({ tripId, driverId: caller.id })
+      .orIgnore()
+      .execute();
   }
 
   private async view(tripId: string, caller: AuthUser): Promise<TripResponse> {

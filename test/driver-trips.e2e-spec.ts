@@ -362,3 +362,84 @@ describe('POST /api/trips/:tripId/accept', () => {
     await ctx.http().post(`/api/trips/${tripId}/accept`).expect(401);
   });
 });
+
+// ------------------------------------------------------------------ declineTrip
+describe('POST /api/trips/:tripId/decline', () => {
+  const decline = (token: string, id: string) =>
+    ctx.http().post(`/api/trips/${id}/decline`).set(bearer(token));
+  const listRequests = (token: string) =>
+    ctx.http().get(`/api/trips/requests${DRIVER_AT_TOWN_CENTRE}`).set(bearer(token));
+
+  it('200: removes the request from this Driver’s list, data null', async () => {
+    const driver = await signUpDriver(ctx);
+    const declined = await book();
+    const kept = await book(ST_FX);
+
+    const res = await decline(driver.token, declined.tripId).expect(200);
+    expect(res.body).toEqual({ success: true, message: 'Trip request declined', data: null });
+
+    const { body } = await listRequests(driver.token).expect(200);
+    expect(body.data.map((r: { tripId: string }) => r.tripId)).toEqual([kept.tripId]);
+  });
+
+  it('the trip stays open for every other Driver, and REQUESTED for the Passenger', async () => {
+    const decliner = await signUpDriver(ctx);
+    const other = await signUpDriver(ctx);
+    const { passenger, tripId } = await book();
+    await decline(decliner.token, tripId).expect(200);
+
+    expect((await listRequests(other.token).expect(200)).body.data[0].tripId).toBe(tripId);
+    await ctx.http().post(`/api/trips/${tripId}/accept`).set(bearer(other.token)).expect(200);
+    const { body } = await ctx.http().get(`/api/trips/${tripId}`).set(bearer(passenger.token)).expect(200);
+    expect(body.data.driver.id).toBe(other.user.id);
+  });
+
+  it('a Driver cannot accept a request they declined', async () => {
+    const driver = await signUpDriver(ctx);
+    const { tripId } = await book();
+    await decline(driver.token, tripId).expect(200);
+    const res = await ctx.http().post(`/api/trips/${tripId}/accept`).set(bearer(driver.token)).expect(409);
+    expect(res.body.message).toBe('This trip is no longer available');
+  });
+
+  it('declining twice is harmless', async () => {
+    const driver = await signUpDriver(ctx);
+    const { tripId } = await book();
+    await decline(driver.token, tripId).expect(200);
+    await decline(driver.token, tripId).expect(200);
+    const [{ count }] = await ctx.db.query('SELECT count(*)::int AS count FROM trip_declines');
+    expect(count).toBe(1);
+  });
+
+  it.each([
+    ['accepted by another Driver', async (tripId: string) => onTrip(tripId, (await signUpDriver(ctx)).user.id)],
+    ['expired', (tripId: string) => backdate(tripId, 121)],
+    ['cancelled', (tripId: string) =>
+      setTrip(tripId, `status = 'CANCELLED', cancel_reason = 'PASSENGER_CANCELLED', cancelled_at = now()`)],
+  ])('409: the request was %s', async (_label, change) => {
+    const driver = await signUpDriver(ctx);
+    const { tripId } = await book();
+    await change(tripId);
+    const res = await decline(driver.token, tripId).expect(409);
+    expect(res.body).toEqual({
+      success: false,
+      message: 'This trip is no longer available',
+      error: { statusCode: 409, status: 'Conflict' },
+    });
+  });
+
+  it.each(['3f6c1b2a-8d4e-4f0a-9b1c-2e7d5a9c4f11', 'not-a-uuid'])('404: unknown or malformed id %s', async (id) => {
+    const driver = await signUpDriver(ctx);
+    expect((await decline(driver.token, id).expect(404)).body.message).toBe('Trip not found');
+  });
+
+  it('403: a Passenger cannot decline', async () => {
+    const { passenger, tripId } = await book();
+    expect((await decline(passenger.token, tripId).expect(403)).body).toEqual(FORBIDDEN);
+  });
+
+  it('401: no token', async () => {
+    const { tripId } = await book();
+    await ctx.http().post(`/api/trips/${tripId}/decline`).expect(401);
+  });
+});

@@ -35,4 +35,12 @@ export class DriverTripsController {
   acceptTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
     return this.driverTrips.accept(caller, tripId);
   }
+
+  /** operationId: declineTrip */
+  @Post(':tripId/decline')
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Trip request declined')
+  declineTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<void> {
+    return this.driverTrips.decline(caller, tripId);
+  }
 }

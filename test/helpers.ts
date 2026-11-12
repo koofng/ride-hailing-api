@@ -28,7 +28,7 @@ export async function createTestApp(): Promise<TestContext> {
 }
 
 export async function resetDatabase(db: DataSource): Promise<void> {
-  await db.query('TRUNCATE "trips", "revoked_tokens", "driver_details", "users" CASCADE');
+  await db.query('TRUNCATE "trip_declines", "trips", "revoked_tokens", "driver_details", "users" CASCADE');
 }
 
 export async function clearUploads(): Promise<void> {
