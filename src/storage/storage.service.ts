@@ -62,6 +62,15 @@ export class StorageService implements OnModuleInit {
     return `${this.publicBaseUrl}/uploads/${key.slice('public/'.length)}`;
   }
 
+  /** Reverse of publicUrl(). Returns null for URLs this storage did not issue. */
+  keyFromPublicUrl(url: string): string | null {
+    const prefix = `${this.publicBaseUrl}/uploads/`;
+    if (!url.startsWith(prefix)) return null;
+    const rest = url.slice(prefix.length);
+    if (!rest || rest.split('/').some((part) => part === '..' || part === '')) return null;
+    return `public/${rest}`;
+  }
+
   /** Best-effort delete, used to clean up after a failed registration. */
   async remove(keys: string[]): Promise<void> {
     await Promise.all(keys.map((key) => rm(join(this.root, key), { force: true })));

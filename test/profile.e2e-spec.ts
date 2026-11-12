@@ -2,7 +2,11 @@ import {
   clearUploads,
   createTestApp,
   ISO_DATE,
+  JPEG,
+  listUploads,
   passengerBody,
+  PDF,
+  PNG,
   registerDriver,
   resetDatabase,
   UUID,
@@ -204,5 +208,125 @@ describe('PATCH /api/users/me', () => {
   it('401: no token', async () => {
     const res = await patchMe(undefined, { fullName: 'Jane Q. Doe' }).expect(401);
     expect(res.body).toEqual(UNAUTHORIZED);
+  });
+});
+
+// ------------------------------------------------------------------ uploadMyPhoto
+describe('PUT /api/users/me/photo', () => {
+  const putPhoto = (
+    token: string | undefined,
+    photo?: { buffer: Buffer; filename: string; contentType: string },
+  ) => {
+    const req = ctx.http().put('/api/users/me/photo');
+    if (token) req.set('Authorization', `Bearer ${token}`);
+    return photo
+      ? req.attach('photo', photo.buffer, { filename: photo.filename, contentType: photo.contentType })
+      : req;
+  };
+  const jpeg = { buffer: JPEG, filename: 'me.jpg', contentType: 'image/jpeg' };
+  const png = { buffer: PNG, filename: 'me.png', contentType: 'image/png' };
+  const PHOTO_URL = /^http:\/\/localhost:3000\/uploads\/photos\/[0-9a-f-]+\.(jpg|png)$/;
+
+  it('200: Passenger adds a first photo and gets the updated profile', async () => {
+    const { token, user } = await signUpPassenger();
+    expect(user.photoUrl).toBeNull();
+
+    const res = await putPhoto(token, jpeg).expect(200);
+    expect(res.body).toEqual({
+      success: true,
+      message: 'Profile photo updated successfully',
+      data: { ...user, photoUrl: expect.stringMatching(PHOTO_URL) },
+    });
+    expect(res.body.data.photoUrl).toMatch(/\.jpg$/);
+  });
+
+  it('serves the new photo publicly and persists the URL', async () => {
+    const { token } = await signUpPassenger();
+    const res = await putPhoto(token, png).expect(200);
+    const { photoUrl } = res.body.data;
+
+    await ctx.http().get(new URL(photoUrl).pathname).expect(200).expect('Content-Type', /image\/png/);
+    const me = await ctx.http().get('/api/users/me').set('Authorization', `Bearer ${token}`);
+    expect(me.body.data.photoUrl).toBe(photoUrl);
+  });
+
+  it('200: Driver replaces their photo; the old file is deleted', async () => {
+    const { token, user } = await signUpDriver();
+    const oldPath = new URL(user.photoUrl).pathname;
+    await ctx.http().get(oldPath).expect(200);
+
+    const res = await putPhoto(token, jpeg).expect(200);
+    expect(res.body.data).toEqual({ ...user, photoUrl: expect.stringMatching(PHOTO_URL) });
+    expect(res.body.data.photoUrl).not.toBe(user.photoUrl);
+
+    await ctx.http().get(oldPath).expect(404);
+    expect(await listUploads('public')).toHaveLength(1);
+  });
+
+  it('leaves the private driver documents alone', async () => {
+    const { token } = await signUpDriver();
+    const before = await listUploads('private');
+    await putPhoto(token, jpeg).expect(200);
+    expect((await listUploads('private')).sort()).toEqual(before.sort());
+  });
+
+  it('400: photo is required', async () => {
+    const { token } = await signUpPassenger();
+    const res = await putPhoto(token).expect(400);
+    expect(res.body).toEqual({
+      success: false,
+      message: 'Request failed validation',
+      error: {
+        statusCode: 400,
+        status: 'Bad Request',
+        details: [{ field: 'photo', message: 'Profile photo is required' }],
+      },
+    });
+  });
+
+  it.each([
+    ['a PDF', { buffer: PDF, filename: 'me.pdf', contentType: 'application/pdf' }],
+    ['a script labelled as PNG', { buffer: Buffer.from('<?php evil(); ?>'), filename: 'me.png', contentType: 'image/png' }],
+  ])('400: rejects %s', async (_label, photo) => {
+    const { token } = await signUpPassenger();
+    const res = await putPhoto(token, photo).expect(400);
+    expect(res.body.error.details).toEqual([
+      { field: 'photo', message: 'Profile photo must be a JPEG or PNG image' },
+    ]);
+  });
+
+  it('400: file larger than 5 MB', async () => {
+    const { token } = await signUpPassenger();
+    const big = Buffer.concat([JPEG, Buffer.alloc(5 * 1024 * 1024)]);
+    const res = await putPhoto(token, { ...jpeg, buffer: big }).expect(400);
+    expect(res.body.error.details).toEqual([
+      { field: 'photo', message: 'File must be 5 MB or smaller' },
+    ]);
+  });
+
+  it('413: rejects uploads far above the limit before buffering them', async () => {
+    const { token } = await signUpPassenger();
+    const huge = Buffer.concat([JPEG, Buffer.alloc(11 * 1024 * 1024)]);
+    const res = await putPhoto(token, { ...jpeg, buffer: huge }).expect(413);
+    expect(res.body).toMatchObject({
+      success: false,
+      error: { statusCode: 413, status: 'Payload Too Large' },
+    });
+  });
+
+  it('keeps the existing photo and writes no files when validation fails', async () => {
+    const { token, user } = await signUpDriver();
+    const before = await listUploads('public');
+    await putPhoto(token, { buffer: PDF, filename: 'me.pdf', contentType: 'application/pdf' }).expect(400);
+
+    expect(await listUploads('public')).toEqual(before);
+    const me = await ctx.http().get('/api/users/me').set('Authorization', `Bearer ${token}`);
+    expect(me.body.data.photoUrl).toBe(user.photoUrl);
+  });
+
+  it('401: no token, and nothing is written', async () => {
+    const res = await putPhoto(undefined, jpeg).expect(401);
+    expect(res.body).toEqual(UNAUTHORIZED);
+    expect(await listUploads('public')).toHaveLength(0);
   });
 });

@@ -71,6 +71,10 @@ export class UsersService {
     await this.users.update({ id: userId }, { fullName });
   }
 
+  async updatePhotoUrl(userId: string, photoUrl: string): Promise<void> {
+    await this.users.update({ id: userId }, { photoUrl });
+  }
+
   async setDriverAvailability(userId: string, available: boolean): Promise<void> {
     await this.driverDetails.update({ userId }, { available });
   }
