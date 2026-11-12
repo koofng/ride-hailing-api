@@ -61,9 +61,14 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
     JWT_EXPIRES_IN_SECONDS: int('JWT_EXPIRES_IN_SECONDS', 86400, 60, 2_592_000),
     BCRYPT_ROUNDS: int('BCRYPT_ROUNDS', 12, 4, 15),
     UPLOAD_DIR: str('UPLOAD_DIR', 'uploads'),
-    // Defaults to this server on PORT. Set it only when clients reach the API
-    // at a different address (a domain, a proxy or a mapped Docker port).
-    PUBLIC_BASE_URL: str('PUBLIC_BASE_URL', `http://localhost:${port}`).replace(/\/+$/, ''),
+    // The address clients use to reach the API, for signed photo links. Set
+    // PUBLIC_BASE_URL for a custom domain or proxy; on Render it defaults to
+    // the service's public URL (RENDER_EXTERNAL_URL, set by Render); locally,
+    // to this server on PORT.
+    PUBLIC_BASE_URL: str(
+      'PUBLIC_BASE_URL',
+      nonEmpty(raw.RENDER_EXTERNAL_URL) ?? `http://localhost:${port}`,
+    ).replace(/\/+$/, ''),
     FILE_URL_TTL_SECONDS: int('FILE_URL_TTL_SECONDS', 900, 60, 86_400),
     STORAGE_DRIVER: storageDriver(raw.STORAGE_DRIVER, errors),
     MONGODB_URI: undefined,
@@ -114,3 +119,6 @@ function mongoUri(value: unknown, errors: string[]): string | undefined {
   }
   return uri;
 }
+
+const nonEmpty = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;

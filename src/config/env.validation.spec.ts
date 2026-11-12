@@ -22,6 +22,26 @@ describe('validateEnv PUBLIC_BASE_URL', () => {
     expect(env.PUBLIC_BASE_URL).toBe('https://api.example.com');
   });
 
+  it("defaults to Render's public URL when running on Render", () => {
+    const env = validateEnv({ ...base, PORT: '10000', RENDER_EXTERNAL_URL: 'https://ride-hailing-api.onrender.com' });
+    expect(env.PUBLIC_BASE_URL).toBe('https://ride-hailing-api.onrender.com');
+  });
+
+  it('an explicit PUBLIC_BASE_URL wins over the Render URL (custom domain)', () => {
+    const env = validateEnv({
+      ...base,
+      RENDER_EXTERNAL_URL: 'https://ride-hailing-api.onrender.com',
+      PUBLIC_BASE_URL: 'https://api.example.com',
+    });
+    expect(env.PUBLIC_BASE_URL).toBe('https://api.example.com');
+  });
+
+  it('falls back to localhost when RENDER_EXTERNAL_URL is empty', () => {
+    expect(validateEnv({ ...base, PORT: '3001', RENDER_EXTERNAL_URL: ' ' }).PUBLIC_BASE_URL).toBe(
+      'http://localhost:3001',
+    );
+  });
+
   it('treats an empty value as unset', () => {
     expect(validateEnv({ ...base, PORT: '4000', PUBLIC_BASE_URL: '' }).PUBLIC_BASE_URL).toBe(
       'http://localhost:4000',
