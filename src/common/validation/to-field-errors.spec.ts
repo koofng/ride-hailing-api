@@ -29,6 +29,14 @@ describe('toFieldErrors', () => {
     ).toEqual([{ field: 'email', message: 'Email is required' }]);
   });
 
+  it('prefers the type message over range messages', () => {
+    expect(
+      toFieldErrors([
+        err('page', { min: 'Page must be 0 or more', isInt: 'Page must be a whole number' }),
+      ]),
+    ).toEqual([{ field: 'page', message: 'Page must be a whole number' }]);
+  });
+
   it('uses dotted paths for nested fields', () => {
     expect(
       toFieldErrors([err('origin', {}, [err('lat', { max: 'Latitude must be at most 90' })])]),

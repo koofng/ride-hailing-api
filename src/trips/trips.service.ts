@@ -11,6 +11,7 @@ import type { AuthUser } from '../auth/token.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import { Role } from '../users/role.enum.js';
 import type { CreateTripDto } from './dto/create-trip.dto.js';
+import type { ListTripsQuery } from './dto/list-trips.query.js';
 import { Trip } from './entities/trip.entity.js';
 import { FIXED_FARE, isWithinServiceArea } from './pricing.js';
 import { ACTIVE_STATUSES, TripStatus } from './trip.enums.js';
@@ -19,6 +20,14 @@ import { toTripView, type TripResponse } from './trip-view.js';
 export const ALREADY_ACTIVE = 'You already have an active trip';
 export const OUTSIDE_SERVICE_AREA = 'Pickup or destination is outside the Antigonish service area';
 export const TRIP_NOT_FOUND = 'Trip not found';
+
+/** Spec: `TripPage` */
+export interface TripPage {
+  items: TripResponse[];
+  page: number;
+  size: number;
+  totalItems: number;
+}
 
 /** Everything toTripView() needs. */
 const WITH_PEOPLE = { passenger: true, driver: { driverDetails: true } } as const;
@@ -63,6 +72,24 @@ export class TripsService {
       throw error;
     }
     return this.view(await this.load(id), caller);
+  }
+
+  /** Trips the caller booked (Passenger) or accepted (Driver), newest first. */
+  async list(caller: AuthUser, query: ListTripsQuery): Promise<TripPage> {
+    const statuses = query.status?.length ? { status: In(query.status) } : {};
+    const [trips, totalItems] = await this.trips.findAndCount({
+      where: { ...this.ownedBy(caller), ...statuses },
+      relations: WITH_PEOPLE,
+      order: { requestedAt: 'DESC', id: 'DESC' },
+      skip: query.page * query.size,
+      take: query.size,
+    });
+    return {
+      items: trips.map((trip) => this.view(trip, caller)),
+      page: query.page,
+      size: query.size,
+      totalItems,
+    };
   }
 
   /**

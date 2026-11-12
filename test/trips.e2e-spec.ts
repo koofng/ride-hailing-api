@@ -351,3 +351,140 @@ describe('GET /api/trips/:tripId', () => {
     await ctx.http().get(`/api/trips/${tripId}`).expect(401);
   });
 });
+
+// ------------------------------------------------------------------ listTrips
+describe('GET /api/trips', () => {
+  const listTrips = (token: string, query = '') =>
+    ctx.http().get(`/api/trips${query}`).set(bearer(token));
+
+  /** Inserts a past trip directly, consistent with the table's check constraints. */
+  const insertTrip = async (
+    passengerId: string,
+    status: string,
+    requestedAt: string,
+    driverId: string | null = null,
+  ): Promise<string> => {
+    const cancelled = status === 'CANCELLED';
+    const [row] = await ctx.db.query(
+      `INSERT INTO trips (passenger_id, driver_id, status, origin_lat, origin_lng, destination_lat,
+         destination_lng, fare_amount, fare_currency, requested_at, cancel_reason, cancelled_at, completed_at)
+       VALUES ($1, $2, $3::text::trip_status, 45.6169, -61.9986, 45.6175, -61.9933, 8, 'CAD', $4,
+         $5::text::trip_cancel_reason, $6::timestamptz, $7::timestamptz)
+       RETURNING id`,
+      [
+        passengerId,
+        driverId,
+        status,
+        requestedAt,
+        cancelled ? 'NO_DRIVER_FOUND' : null,
+        cancelled ? requestedAt : null,
+        status === 'COMPLETED' ? requestedAt : null,
+      ],
+    );
+    return row.id;
+  };
+
+  /** A Passenger with 3 past trips (2 completed with the Driver, 1 cancelled) and an active one. */
+  const setUp = async () => {
+    const passenger = await signUpPassenger(ctx);
+    const driver = await signUpDriver(ctx);
+    const ids = {
+      oldest: await insertTrip(passenger.user.id, 'COMPLETED', '2026-11-01T10:00:00Z', driver.user.id),
+      cancelled: await insertTrip(passenger.user.id, 'CANCELLED', '2026-11-02T10:00:00Z'),
+      completed: await insertTrip(passenger.user.id, 'COMPLETED', '2026-11-03T10:00:00Z', driver.user.id),
+      active: await insertTrip(passenger.user.id, 'REQUESTED', '2026-11-04T10:00:00Z'),
+    };
+    return { passenger, driver, ids };
+  };
+
+  it('200: Passenger sees all their trips, newest first, with the default page', async () => {
+    const { passenger, ids } = await setUp();
+    const res = await listTrips(passenger.token).expect(200);
+
+    expect(res.body).toMatchObject({
+      success: true,
+      message: 'Trips retrieved successfully',
+      data: { page: 0, size: 20, totalItems: 4 },
+    });
+    expect(res.body.data.items.map((t: { id: string }) => t.id)).toEqual([
+      ids.active,
+      ids.completed,
+      ids.cancelled,
+      ids.oldest,
+    ]);
+  });
+
+  it('items use the same Trip shape and visibility rules as getTrip', async () => {
+    const { passenger, ids } = await setUp();
+    const list = await listTrips(passenger.token).expect(200);
+    for (const id of [ids.completed, ids.cancelled]) {
+      const one = await ctx.http().get(`/api/trips/${id}`).set(bearer(passenger.token)).expect(200);
+      expect(list.body.data.items.find((t: { id: string }) => t.id === id)).toEqual(one.body.data);
+    }
+  });
+
+  it('200: Driver sees only the trips they accepted, with the Passenger on completed ones', async () => {
+    const { passenger, driver, ids } = await setUp();
+    const res = await listTrips(driver.token).expect(200);
+
+    expect(res.body.data.totalItems).toBe(2);
+    expect(res.body.data.items.map((t: { id: string }) => t.id)).toEqual([ids.completed, ids.oldest]);
+    for (const trip of res.body.data.items) {
+      expect(trip.passenger.id).toBe(passenger.user.id);
+    }
+  });
+
+  it('only ever returns the caller’s own trips', async () => {
+    await setUp();
+    const otherPassenger = await signUpPassenger(ctx);
+    const otherDriver = await signUpDriver(ctx);
+    for (const user of [otherPassenger, otherDriver]) {
+      const res = await listTrips(user.token).expect(200);
+      expect(res.body.data).toEqual({ items: [], page: 0, size: 20, totalItems: 0 });
+    }
+  });
+
+  it.each([
+    ['?status=COMPLETED', ['completed', 'oldest']],
+    ['?status=COMPLETED,CANCELLED', ['completed', 'cancelled', 'oldest']],
+    ['?status=COMPLETED&status=CANCELLED', ['completed', 'cancelled', 'oldest']],
+    ['?status=requested', ['active']],
+    ['?status=IN_PROGRESS', []],
+  ])('filters by status: %s', async (query, expected) => {
+    const { passenger, ids } = await setUp();
+    const res = await listTrips(passenger.token, query).expect(200);
+    expect(res.body.data.items.map((t: { id: string }) => t.id)).toEqual(
+      expected.map((k) => ids[k as keyof typeof ids]),
+    );
+    expect(res.body.data.totalItems).toBe(expected.length);
+  });
+
+  it('paginates, and totalItems counts every matching trip', async () => {
+    const { passenger, ids } = await setUp();
+    const first = await listTrips(passenger.token, '?page=0&size=3').expect(200);
+    const second = await listTrips(passenger.token, '?page=1&size=3').expect(200);
+    const beyond = await listTrips(passenger.token, '?page=5&size=3').expect(200);
+
+    expect(first.body.data).toMatchObject({ page: 0, size: 3, totalItems: 4 });
+    expect(first.body.data.items).toHaveLength(3);
+    expect(second.body.data.items.map((t: { id: string }) => t.id)).toEqual([ids.oldest]);
+    expect(beyond.body.data).toMatchObject({ items: [], page: 5, size: 3, totalItems: 4 });
+  });
+
+  it.each([
+    ['?status=FINISHED', 'status', 'Status must be one of: REQUESTED, ACCEPTED, DRIVER_ARRIVED, IN_PROGRESS, COMPLETED, CANCELLED'],
+    ['?page=-1', 'page', 'Page must be 0 or more'],
+    ['?page=abc', 'page', 'Page must be a whole number'],
+    ['?size=0', 'size', 'Size must be between 1 and 100'],
+    ['?size=101', 'size', 'Size must be between 1 and 100'],
+    ['?size=2.5', 'size', 'Size must be a whole number'],
+  ])('400: %s', async (query, field, message) => {
+    const passenger = await signUpPassenger(ctx);
+    const res = await listTrips(passenger.token, query).expect(400);
+    expect(res.body.error.details).toEqual([{ field, message }]);
+  });
+
+  it('401: no token', async () => {
+    await ctx.http().get('/api/trips').expect(401);
+  });
+});
