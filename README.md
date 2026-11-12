@@ -4,8 +4,8 @@ NestJS 12 + PostgreSQL 17 + TypeORM backend for the API contract in
 [`ride-hailing-api.yaml`](ride-hailing-api.yaml).
 
 **Status: stage 2 in progress.** Project setup, database, the `User` model,
-the four `Auth` endpoints and the three `Profile` endpoints. Every other
-endpoint in the spec returns 404 for now.
+the four `Auth` endpoints, the three `Profile` endpoints and the five
+Passenger `Trips` endpoints. Every other endpoint in the spec returns 404 for now.
 
 | Endpoint | Auth | Notes |
 |---|---|---|
@@ -17,6 +17,11 @@ endpoint in the spec returns 404 for now.
 | `PATCH /api/users/me` | Bearer JWT | JSON body, `fullName` only |
 | `PUT /api/users/me/photo` | Bearer JWT | `multipart/form-data` with `photo` |
 | `GET /api/files/photos/:name` | signed link | the `photoUrl` from a profile; not built by clients |
+| `POST /api/trips` | Passenger | one active trip at a time; 422 outside the service area |
+| `GET /api/trips` | Passenger or Driver | `?status=A,B&page=0&size=20`, newest first |
+| `GET /api/trips/active` | Passenger or Driver | `data: null` when there is none |
+| `GET /api/trips/:tripId` | Passenger or Driver on the trip | 404 for anyone else |
+| `POST /api/trips/:tripId/cancel` | Passenger | only while `REQUESTED`; `{ reason, note? }` |
 
 ## Running it
 
@@ -101,12 +106,24 @@ test/                                    e2e tests (Vitest + Supertest)
   expired and unknown links all get the same 403, so the endpoint does not
   reveal which photos exist. Replacing a photo deletes the old file, so its
   old links stop working.
+- **Roles.** `@Roles(Role.PASSENGER)` on an endpoint restricts it; the global
+  `RolesGuard` runs after the JWT guard and returns the spec's 403.
+- **Trips.** One active trip per Passenger (and per Driver) is enforced by
+  partial unique indexes, so simultaneous bookings cannot both succeed. The
+  fare (fixed 8.00 CAD) is stored on each trip. The service area is a 10 km
+  radius around the town centre (`src/trips/pricing.ts`). Cancelling is a
+  single conditional update, so it cannot race a Driver accepting.
+- **Trip visibility.** `toTripView()` builds every trip response for the
+  viewer: the Passenger never sees the Driver on a cancelled trip; the Driver
+  sees the Passenger only while the trip is active or completed, and never the
+  Passenger's cancellation reason.
 - **Normalisation.** Email is stored in lower case, and plate numbers in upper
   case with spaces collapsed, so duplicates are caught regardless of case.
 
-## Not in stage 1
+## Not built yet
 
 - `deviceToken` in the logout body is validated but not used yet, because push
   tokens are not registered until push notifications are built.
-- No role-based guard yet: none of the auth endpoints is role-restricted.
-  It comes with the first Passenger-only or Driver-only endpoint.
+- Trip dispatch: `trip:request` to Drivers and the `NO_DRIVER_FOUND` timeout
+  come with the Driver trip endpoints and WebSockets. Until then a booked trip
+  stays `REQUESTED` until the Passenger cancels it.

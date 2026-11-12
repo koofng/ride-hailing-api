@@ -10,6 +10,7 @@ import { toFieldErrors } from './common/validation/to-field-errors.js';
 import { validateEnv, type AppEnv } from './config/env.validation.js';
 import { buildTypeOrmOptions } from './database/typeorm-options.js';
 import { StorageModule } from './storage/storage.module.js';
+import { TripsModule } from './trips/trips.module.js';
 import { UsersModule } from './users/users.module.js';
 
 @Module({
@@ -29,6 +30,7 @@ import { UsersModule } from './users/users.module.js';
     StorageModule,
     UsersModule,
     AuthModule,
+    TripsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

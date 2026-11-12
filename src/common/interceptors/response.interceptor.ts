@@ -7,7 +7,10 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { map, type Observable } from 'rxjs';
-import { RESPONSE_MESSAGE_KEY } from '../decorators/response-message.decorator.js';
+import {
+  RESPONSE_MESSAGE_KEY,
+  type MessageSource,
+} from '../decorators/response-message.decorator.js';
 import type { SuccessResponse } from '../response/api-response.js';
 
 const DEFAULT_MESSAGE = 'Request successful';
@@ -28,18 +31,18 @@ export class ResponseInterceptor<T>
     context: ExecutionContext,
     next: CallHandler<T>,
   ): Observable<SuccessResponse<T | null> | StreamableFile> {
-    const message =
-      this.reflector.getAllAndOverride<string | undefined>(RESPONSE_MESSAGE_KEY, [
+    const source =
+      this.reflector.getAllAndOverride<MessageSource | undefined>(RESPONSE_MESSAGE_KEY, [
         context.getHandler(),
         context.getClass(),
       ]) ?? DEFAULT_MESSAGE;
 
     return next.handle().pipe(
-      map((data) =>
-        data instanceof StreamableFile
-          ? data
-          : { success: true as const, message, data: data ?? null },
-      ),
+      map((data) => {
+        if (data instanceof StreamableFile) return data;
+        const message = typeof source === 'function' ? source(data ?? null) : source;
+        return { success: true as const, message, data: data ?? null };
+      }),
     );
   }
 }
