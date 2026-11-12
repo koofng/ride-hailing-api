@@ -277,3 +277,117 @@ describe('trip:accepted, trip:arrived, trip:started, trip:completed', () => {
     await nothing;
   });
 });
+
+// ------------------------------------------------------------------ driver:location
+describe('driver:location', () => {
+  const sendLocation = (socket: Socket, body: unknown) => socket.timeout(2000).emitWithAck('driver:location', body);
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('stores an online Driver’s position and acknowledges it', async () => {
+    const driver = await onlineDriver(TOWN_CENTRE);
+    const ack = await sendLocation(driver.socket, { ...NEAR, heading: 90 });
+    expect(ack).toEqual({ success: true, message: 'Location updated', data: { accepted: true } });
+
+    const [row] = await ctx.db.query('SELECT last_lat, last_lng FROM driver_details WHERE user_id = $1', [
+      driver.user.id,
+    ]);
+    expect(row).toEqual({ last_lat: NEAR.lat, last_lng: NEAR.lng });
+  });
+
+  it('moves the Driver on the Passenger map (GET /drivers/active)', async () => {
+    const driver = await onlineDriver({ lat: 45.8419, lng: -61.9986 });
+    const passenger = await signUpPassenger(ctx);
+    const active = () =>
+      ctx.http().get(`/api/drivers/active?lat=${TOWN_CENTRE.lat}&lng=${TOWN_CENTRE.lng}`).set(bearer(passenger.token));
+    expect((await active().expect(200)).body.data).toEqual([]);
+
+    await sendLocation(driver.socket, NEAR);
+    expect((await active().expect(200)).body.data[0]).toMatchObject({ driverId: driver.user.id, location: NEAR });
+  });
+
+  it('is not stored while the Driver is offline', async () => {
+    const driver = await withSocket(await signUpDriver(ctx));
+    await sendLocation(driver.socket, NEAR);
+    const [row] = await ctx.db.query('SELECT last_lat FROM driver_details WHERE user_id = $1', [driver.user.id]);
+    expect(row.last_lat).toBeNull();
+  });
+
+  it('during a trip, reaches the Passenger with an ETA to the pickup, then to the destination', async () => {
+    const driver = await onlineDriver(NEAR);
+    const passenger = await connectedPassenger();
+    // Pickup at St. F.X., destination the town centre.
+    const tripId = await book(passenger, ST_FX);
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+
+    const toPickup = nextEvent(passenger.socket, 'driver:location');
+    await sendLocation(driver.socket, { ...TOWN_CENTRE, heading: 45 });
+    // 0.418 km at 30 km/h.
+    expect(await toPickup).toEqual({ tripId, lat: TOWN_CENTRE.lat, lng: TOWN_CENTRE.lng, heading: 45, etaSeconds: 50 });
+
+    await post(driver.token, `/api/trips/${tripId}/arrive`).expect(200);
+    await post(driver.token, `/api/trips/${tripId}/start`).expect(200);
+    await wait(1000);
+    const toDestination = nextEvent(passenger.socket, 'driver:location');
+    await sendLocation(driver.socket, ST_FX);
+    expect(await toDestination).toEqual({ tripId, lat: ST_FX.lat, lng: ST_FX.lng, etaSeconds: 50 });
+  });
+
+  it('is not forwarded to anyone when the Driver has no active trip, or after it completes', async () => {
+    const driver = await onlineDriver();
+    const passenger = await connectedPassenger();
+    const tripId = await book(passenger);
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+    for (const step of ['arrive', 'start', 'complete']) {
+      await post(driver.token, `/api/trips/${tripId}/${step}`).expect(200);
+    }
+
+    const nothing = noEvent(passenger.socket, 'driver:location');
+    await sendLocation(driver.socket, NEAR);
+    await nothing;
+  });
+
+  it('ignores updates sent more than once a second', async () => {
+    const driver = await onlineDriver(TOWN_CENTRE);
+    await sendLocation(driver.socket, NEAR);
+    const ack = await sendLocation(driver.socket, ST_FX);
+    expect(ack).toEqual({
+      success: true,
+      message: 'Ignored: send at most one location per second',
+      data: { accepted: false },
+    });
+    const [row] = await ctx.db.query('SELECT last_lat FROM driver_details WHERE user_id = $1', [driver.user.id]);
+    expect(row.last_lat).toBe(NEAR.lat);
+
+    await wait(1000);
+    expect((await sendLocation(driver.socket, ST_FX)).data).toEqual({ accepted: true });
+  });
+
+  it.each([
+    [{}, [
+      { field: 'lat', message: 'Latitude is required' },
+      { field: 'lng', message: 'Longitude is required' },
+    ]],
+    [{ lat: 95, lng: -61.9 }, [{ field: 'lat', message: 'Latitude must be between -90 and 90' }]],
+    [{ lat: 45.6, lng: -61.9, heading: 400 }, [{ field: 'heading', message: 'Heading must be between 0 and 360' }]],
+  ])('invalid %j gets an "exception" event with the field errors', async (body, details) => {
+    const driver = await onlineDriver();
+    const error = nextEvent(driver.socket, 'exception');
+    driver.socket.emit('driver:location', body);
+    expect(await error).toEqual({
+      success: false,
+      message: 'Request failed validation',
+      error: { statusCode: 400, status: 'Bad Request', details },
+    });
+  });
+
+  it('a Passenger cannot send a Driver location', async () => {
+    const passenger = await connectedPassenger();
+    const error = nextEvent(passenger.socket, 'exception');
+    passenger.socket.emit('driver:location', NEAR);
+    expect(await error).toEqual({
+      success: false,
+      message: 'Your account role is not allowed to perform this action',
+      error: { statusCode: 403, status: 'Forbidden' },
+    });
+  });
+});

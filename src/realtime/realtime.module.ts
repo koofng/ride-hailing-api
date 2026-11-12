@@ -5,6 +5,7 @@ import { DriversModule } from '../drivers/drivers.module.js';
 import { StorageModule } from '../storage/storage.module.js';
 import { Trip } from '../trips/entities/trip.entity.js';
 import { TripsModule } from '../trips/trips.module.js';
+import { DriverLocationRelay } from './driver-location.relay.js';
 import { RealtimeGateway } from './realtime.gateway.js';
 import { TripNotifier } from './trip-notifier.js';
 
@@ -16,6 +17,6 @@ import { TripNotifier } from './trip-notifier.js';
     StorageModule,
     TypeOrmModule.forFeature([Trip]),
   ],
-  providers: [RealtimeGateway, TripNotifier],
+  providers: [RealtimeGateway, TripNotifier, DriverLocationRelay],
 })
 export class RealtimeModule {}

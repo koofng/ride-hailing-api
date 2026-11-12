@@ -1,22 +1,37 @@
-import { Logger } from '@nestjs/common';
+import { Logger, UseFilters } from '@nestjs/common';
 import {
+  ConnectedSocket,
+  MessageBody,
+  SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
   type OnGatewayConnection,
   type OnGatewayInit,
 } from '@nestjs/websockets';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import type { Server, Socket } from 'socket.io';
 import { TokenService, type AuthUser } from '../auth/token.service.js';
+import { ApiValidationException } from '../common/errors/api-validation.exception.js';
+import { ResponseMessage } from '../common/decorators/response-message.decorator.js';
+import { Roles } from '../common/decorators/roles.decorator.js';
+import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter.js';
+import { toFieldErrors } from '../common/validation/to-field-errors.js';
 import { Role } from '../users/role.enum.js';
+import { DriverLocationRelay } from './driver-location.relay.js';
+import { DriverLocationDto } from './dto/driver-location.dto.js';
 
 export const DRIVERS_ROOM = 'drivers';
 export const userRoom = (userId: string) => `user:${userId}`;
 const tokenRoom = (jti: string) => `token:${jti}`;
 
+/** Location updates closer together than this (per socket) are ignored. */
+export const LOCATION_MIN_INTERVAL_MS = 1000;
+
 /** setTimeout cannot wait longer than this (about 24.8 days). */
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
-export type AuthedSocket = Socket & { data: { user: AuthUser } };
+export type AuthedSocket = Socket & { data: { user: AuthUser; lastLocationAt?: number } };
 
 /** The token from `auth: { token }` (preferred) or an `Authorization: Bearer` header. */
 function tokenFrom(socket: Socket): string | null {
@@ -34,12 +49,18 @@ function tokenFrom(socket: Socket): string | null {
  * drivers room), so events can be sent to a person on every device they use.
  */
 @WebSocketGateway({ cors: { origin: true } })
+// Global (APP_FILTER) filters do not apply to gateways, so opt in here: errors
+// reach the socket as an "exception" event in the same envelope as REST.
+@UseFilters(AllExceptionsFilter)
 export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
   private readonly logger = new Logger(RealtimeGateway.name);
 
   @WebSocketServer() private server!: Server;
 
-  constructor(private readonly tokens: TokenService) {}
+  constructor(
+    private readonly tokens: TokenService,
+    private readonly locations: DriverLocationRelay,
+  ) {}
 
   afterInit(server: Server): void {
     // Checked before the connection is accepted: a socket without a valid,
@@ -76,6 +97,35 @@ export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection {
       Math.min(Math.max(user.expiresAt.getTime() - Date.now(), 0), MAX_TIMEOUT_MS),
     );
     socket.once('disconnect', () => clearTimeout(timer));
+  }
+
+  /**
+   * driver:location from the Driver app: stores the position and, during a
+   * trip, forwards it to the Passenger with an ETA. The acknowledgement says
+   * whether the update was used; more than one per second is ignored.
+   */
+  @SubscribeMessage('driver:location')
+  @Roles(Role.DRIVER)
+  @ResponseMessage((data: { accepted: boolean }) =>
+    data.accepted ? 'Location updated' : 'Ignored: send at most one location per second',
+  )
+  async onDriverLocation(
+    @ConnectedSocket() socket: AuthedSocket,
+    @MessageBody() body: unknown,
+  ): Promise<{ accepted: boolean }> {
+    const location = plainToInstance(DriverLocationDto, body ?? {});
+    const errors = toFieldErrors(await validate(location, { whitelist: true }));
+    if (errors.length) throw new ApiValidationException(errors);
+
+    const now = Date.now();
+    if (socket.data.lastLocationAt && now - socket.data.lastLocationAt < LOCATION_MIN_INTERVAL_MS) {
+      return { accepted: false };
+    }
+    socket.data.lastLocationAt = now;
+
+    const forward = await this.locations.update(socket.data.user.id, location);
+    if (forward) this.toUser(forward.passengerId, 'driver:location', forward.event);
+    return { accepted: true };
   }
 
   /** Sends an event to every connected device of one user. */
