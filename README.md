@@ -3,10 +3,9 @@
 NestJS 12 + PostgreSQL 17 + TypeORM backend for the API contract in
 [`ride-hailing-api.yaml`](ride-hailing-api.yaml).
 
-**Status: stage 2 in progress.** Project setup, database, the `User` model,
-the four `Auth` endpoints, the three `Profile` endpoints, the five Passenger
-`Trips` endpoints and the six `Driver Trips` endpoints. The `Drivers` and
-`Fares` endpoints and the WebSocket events are not built yet.
+**Status: every REST endpoint in the spec is built** (Auth, Profile, Drivers,
+Fares, Trips and Driver Trips). The WebSocket events and push notifications
+are not built yet.
 
 | Endpoint | Auth | Notes |
 |---|---|---|
@@ -24,6 +23,9 @@ the four `Auth` endpoints, the three `Profile` endpoints, the five Passenger
 | `GET /api/trips/active` | Passenger or Driver | `data: null` when there is none |
 | `GET /api/trips/:tripId` | Passenger or Driver on the trip | 404 for anyone else |
 | `POST /api/trips/:tripId/cancel` | Passenger | only while `REQUESTED`; `{ reason, note? }` |
+| `PATCH /api/drivers/me/availability` | Driver | `{ available, lat?, lng? }`; position required to go online |
+| `GET /api/drivers/active` | Passenger | `?lat=&lng=&radiusKm=5`; online, free Drivers for the map |
+| `POST /api/fares/quote` | Passenger | fixed fare and `withinServiceArea` |
 | `GET /api/trips/requests` | Driver | `?lat=&lng=` (Driver's position); nearest first |
 | `POST /api/trips/:tripId/accept` | Driver | first Driver wins; one active trip per Driver |
 | `POST /api/trips/:tripId/decline` | Driver | hides the request from this Driver |
@@ -131,9 +133,13 @@ src/
   config/env.validation.ts               env vars checked at startup
   common/                                response envelope (interceptor + error filter), validation helpers, @Public(), @ResponseMessage()
   database/                              TypeORM options, CLI data source, migrations
-  users/                                 User + DriverDetails entities, UserProfile mapping
-  auth/                                  controller, service, JWT guard, token revocation, DTOs
-  storage/                               local file storage for uploads
+  users/                                 User + DriverDetails entities, profile endpoints
+  auth/                                  controller, service, JWT and roles guards, token revocation, DTOs
+  drivers/                               online status, Driver positions, active Drivers for the map
+  fares/                                 fixed fare, service area, distance (pricing.ts), fare quotes
+  trips/                                 Passenger and Driver trip endpoints, request expiry
+  storage/                               file storage (disk or MongoDB GridFS) and signed photo links
+  health/                                GET /api/health
 test/                                    e2e tests (Vitest + Supertest)
 ```
 
@@ -187,6 +193,14 @@ test/                                    e2e tests (Vitest + Supertest)
   viewer: the Passenger never sees the Driver on a cancelled trip; the Driver
   sees the Passenger only while the trip is active or completed, and never the
   Passenger's cancellation reason.
+- **Driver presence.** Going online records the Driver's position; going
+  offline or logging out clears it, and positions are only recorded while
+  online. Until WebSockets exist, every `GET /api/trips/requests?lat=&lng=`
+  also updates the position. The Passenger map shows online Drivers who are
+  not on a trip and reported a position in the last 5 minutes. Online status
+  does not yet limit who sees trip requests.
+- **Fares.** `FaresService.quote()` prices both quotes and bookings, so the
+  quoted fare is always the fare charged.
 - **Normalisation.** Email is stored in lower case, and plate numbers in upper
   case with spaces collapsed, so duplicates are caught regardless of case.
 
@@ -195,7 +209,8 @@ test/                                    e2e tests (Vitest + Supertest)
 - `deviceToken` in the logout body is validated but not used yet, because push
   tokens are not registered until push notifications are built.
 - Real-time events and push notifications (`trip:request`, `trip:accepted`,
-  ...). Drivers find requests through `GET /api/trips/requests` for now, and
-  send their position with it until live location exists.
-- Driver online status: `PATCH /drivers/me/availability` is not built, so any
-  Driver without an active trip can see and accept requests.
+  `driver:location`, ...). Drivers find requests through
+  `GET /api/trips/requests` for now, and send their position with it until
+  live location exists.
+- Online-only requests: any Driver without an active trip can see and accept
+  requests, whether online or not.
