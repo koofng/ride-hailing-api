@@ -4,10 +4,11 @@ import { isUUID } from 'class-validator';
 import { In, Repository } from 'typeorm';
 import type { AuthUser } from '../auth/token.service.js';
 import { violatesConstraint } from '../common/errors/violates-constraint.js';
+import { DriversService } from '../drivers/drivers.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import { TripDecline } from './entities/trip-decline.entity.js';
 import { Trip } from './entities/trip.entity.js';
-import type { Point } from './pricing.js';
+import type { Point } from '../fares/pricing.js';
 import { ACTIVE_STATUSES, TripStatus } from './trip.enums.js';
 import { TripExpiryService } from './trip-expiry.service.js';
 import { toTripRequest, type TripRequestResponse } from './trip-request-view.js';
@@ -34,6 +35,7 @@ export class DriverTripsService {
     @InjectRepository(TripDecline) private readonly declines: Repository<TripDecline>,
     private readonly expiry: TripExpiryService,
     private readonly storage: StorageService,
+    private readonly drivers: DriversService,
   ) {}
 
   /**
@@ -42,6 +44,9 @@ export class DriverTripsService {
    * cannot accept another.
    */
   async listRequests(caller: AuthUser, from: Point): Promise<TripRequestResponse[]> {
+    // The Driver app polls this, so it doubles as their position update for
+    // the Passenger map until live location arrives over WebSockets.
+    await this.drivers.recordLocation(caller.id, from);
     if (await this.hasActiveTrip(caller.id)) return [];
 
     const open = await this.openRequests()

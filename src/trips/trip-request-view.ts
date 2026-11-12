@@ -1,5 +1,5 @@
 import type { Trip } from './entities/trip.entity.js';
-import { distanceKm, type Point } from './pricing.js';
+import { distanceKm, type Point } from '../fares/pricing.js';
 import type { PlaceResponse } from './trip-view.js';
 
 /** Spec: `TripRequest`. What a Driver sees before accepting. */

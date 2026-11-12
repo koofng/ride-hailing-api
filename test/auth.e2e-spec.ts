@@ -526,9 +526,4 @@ describe('error format', () => {
       },
     });
   });
-
-  it('stage-2 endpoints are not built yet', async () => {
-    await ctx.http().get('/api/drivers/active').expect(404);
-    await ctx.http().post('/api/fares/quote').expect(404);
-  });
 });

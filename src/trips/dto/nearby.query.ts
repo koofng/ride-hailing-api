@@ -1,7 +1,7 @@
 import { Type } from 'class-transformer';
 import { IsDefined, IsLatitude, IsLongitude, IsNumber } from 'class-validator';
 
-/** The Driver's current position, until live location arrives over WebSockets. */
+/** A position sent as ?lat=&lng= (a Driver's current position, or a map centre). */
 export class NearbyQuery {
   @IsDefined({ message: 'Latitude is required' })
   @Type(() => Number)

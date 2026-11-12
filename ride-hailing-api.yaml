@@ -418,6 +418,11 @@ paths:
       description: |
         An available Driver with no active trip receives `trip:request` events.
         A Driver cannot go offline while they have an active trip.
+
+        Going online requires the Driver's current `lat` and `lng`, so they appear on
+        Passengers' maps (until live location arrives over WebSockets). Going offline,
+        or logging out, clears the stored position. The message is "You are now online"
+        or "You are now offline".
       requestBody:
         required: true
         content:
@@ -436,6 +441,8 @@ paths:
                     properties:
                       data:
                         $ref: '#/components/schemas/AvailabilityResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -458,7 +465,12 @@ paths:
       tags: [Drivers]
       operationId: listActiveDrivers
       summary: List online Drivers near a location (Passenger only)
-      description: Used to show active Drivers on the Passenger's map.
+      description: |
+        Used to show active Drivers on the Passenger's map. Returns online Drivers who are
+        not on an active trip and whose position is less than 5 minutes old, nearest first
+        (at most 50). Only the Driver's id and position are shown. Positions come from going
+        online and from the Driver's `GET /trips/requests?lat=&lng=` calls, until live
+        location arrives over WebSockets.
       parameters:
         - name: lat
           in: query
@@ -514,7 +526,9 @@ paths:
       summary: Get the fare before confirming a booking (Passenger only)
       description: |
         Returns the fixed fare (8.00 CAD) and whether both points are inside the
-        Antigonish service area. The fare is defined only on the server.
+        Antigonish service area. The fare is defined only on the server, and booking
+        uses the same calculation. Always 200 for a valid request: outside the area,
+        `withinServiceArea` is false and the message says so.
       requestBody:
         required: true
         content:
@@ -1434,6 +1448,18 @@ components:
       properties:
         available:
           type: boolean
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          description: Required when `available` is true
+        lng:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          description: Required when `available` is true
 
     AvailabilityResponse:
       type: object

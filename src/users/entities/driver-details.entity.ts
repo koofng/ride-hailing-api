@@ -44,4 +44,14 @@ export class DriverDetails {
 
   @Column({ type: 'boolean', default: false })
   available: boolean;
+
+  /** Last known position, kept only while online (cleared on going offline). */
+  @Column({ name: 'last_lat', type: 'double precision', nullable: true })
+  lastLat: number | null;
+
+  @Column({ name: 'last_lng', type: 'double precision', nullable: true })
+  lastLng: number | null;
+
+  @Column({ name: 'location_updated_at', type: 'timestamptz', nullable: true })
+  locationUpdatedAt: Date | null;
 }
