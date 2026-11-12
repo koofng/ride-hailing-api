@@ -79,6 +79,10 @@ export class GridFsFileStore implements FileStore {
     );
   }
 
+  async ping(): Promise<void> {
+    await this.requireDb().command({ ping: 1 });
+  }
+
   async close(): Promise<void> {
     await this.client.close();
   }

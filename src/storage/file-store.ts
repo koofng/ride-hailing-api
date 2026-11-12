@@ -23,6 +23,8 @@ export interface FileStore {
   open(key: string): Promise<StoredFile | null>;
   /** Deletes files; keys that do not exist are ignored. */
   delete(keys: string[]): Promise<void>;
+  /** Resolves if the backend is reachable; used by the health check. */
+  ping(): Promise<void>;
   /** Releases connections on shutdown. */
   close(): Promise<void>;
 }

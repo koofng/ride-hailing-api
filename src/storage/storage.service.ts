@@ -99,6 +99,11 @@ export class StorageService implements OnModuleInit, OnModuleDestroy {
     return this.store.open(`${PHOTO_FOLDER}/${name}`);
   }
 
+  /** Resolves if the file store is reachable. */
+  ping(): Promise<void> {
+    return this.store.ping();
+  }
+
   /** Best-effort delete, used to clean up after a failed write or a replaced photo. */
   async remove(keys: string[]): Promise<void> {
     await this.store.delete(keys);

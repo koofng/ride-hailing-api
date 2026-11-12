@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, constants, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join } from 'node:path';
 import type { FileStore, StoredFile } from './file-store.js';
 
@@ -43,6 +43,10 @@ export class DiskFileStore implements FileStore {
 
   async delete(keys: string[]): Promise<void> {
     await Promise.all(keys.map((key) => rm(join(this.root, key), { force: true })));
+  }
+
+  async ping(): Promise<void> {
+    await access(this.root, constants.R_OK | constants.W_OK);
   }
 
   async close(): Promise<void> {}

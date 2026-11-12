@@ -84,6 +84,10 @@ describe.each(Object.keys(backends))('%s FileStore', (name) => {
     expect((await store.open('private/driver-documents/a.pdf'))?.contentType).toBe('application/pdf');
   });
 
+  it('answers a ping once initialised', async () => {
+    await expect(store.ping()).resolves.toBeUndefined();
+  });
+
   it('deletes files and ignores keys that do not exist', async () => {
     await store.put(KEY, Buffer.from('x'), 'image/png');
     await store.delete([KEY, 'public/photos/never-existed.png']);
