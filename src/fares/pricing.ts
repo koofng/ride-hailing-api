@@ -27,3 +27,14 @@ export function distanceKm(a: Point, b: Point): number {
 export function isWithinServiceArea(point: Point): boolean {
   return distanceKm(point, SERVICE_AREA) <= SERVICE_AREA.radiusKm;
 }
+
+/**
+ * Assumed average driving speed in town. A routing service could replace
+ * this estimate later; until then ETAs are distance at this speed.
+ */
+export const AVERAGE_SPEED_KMH = 30;
+
+/** Estimated seconds to drive `km` at AVERAGE_SPEED_KMH, rounded to the second. */
+export function etaSeconds(km: number): number {
+  return Math.round((km / AVERAGE_SPEED_KMH) * 3600);
+}

@@ -182,3 +182,98 @@ describe('trip:withdrawn', () => {
     await notForBystander;
   });
 });
+
+// ------------------------------------------------------------------ Passenger trip updates
+describe('trip:accepted, trip:arrived, trip:started, trip:completed', () => {
+  it('trip:accepted brings the Driver, their vehicle and an ETA to the pickup', async () => {
+    // The Driver is about 1.1 km from the pickup: 2.2 minutes at 30 km/h.
+    const driver = await onlineDriver(NEAR);
+    const passenger = await connectedPassenger();
+    const tripId = await book(passenger, TOWN_CENTRE);
+
+    const accepted = nextEvent(passenger.socket, 'trip:accepted');
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+    expect(await accepted).toEqual({
+      tripId,
+      driver: {
+        id: driver.user.id,
+        fullName: 'John Smith',
+        phone: driver.user.phone,
+        photoUrl: expect.stringMatching(/\/api\/files\/photos\//),
+        vehicle: {
+          make: 'Toyota',
+          model: 'Corolla',
+          colour: 'Silver',
+          plateNumber: driver.user.driverDetails!.vehicle.plateNumber,
+        },
+      },
+      etaSeconds: 133,
+    });
+  });
+
+  it('etaSeconds is null when the Driver has never reported a position', async () => {
+    const driver = await withSocket(await signUpDriver(ctx));
+    const passenger = await connectedPassenger();
+    const tripId = await book(passenger);
+
+    const accepted = nextEvent(passenger.socket, 'trip:accepted');
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+    expect((await accepted).etaSeconds).toBeNull();
+  });
+
+  it('each step reaches the Passenger with its time, and the fare at the end', async () => {
+    const driver = await onlineDriver();
+    const passenger = await connectedPassenger();
+    const tripId = await book(passenger);
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+
+    const arrived = nextEvent(passenger.socket, 'trip:arrived');
+    await post(driver.token, `/api/trips/${tripId}/arrive`).expect(200);
+    expect(await arrived).toEqual({ tripId, status: 'DRIVER_ARRIVED', at: expect.any(String) });
+
+    const started = nextEvent(passenger.socket, 'trip:started');
+    await post(driver.token, `/api/trips/${tripId}/start`).expect(200);
+    expect(await started).toEqual({ tripId, status: 'IN_PROGRESS', at: expect.any(String) });
+
+    const completed = nextEvent(passenger.socket, 'trip:completed');
+    const done = await post(driver.token, `/api/trips/${tripId}/complete`).expect(200);
+    expect(await completed).toEqual({
+      tripId,
+      fare: { amount: 8, currency: 'CAD' },
+      completedAt: done.body.data.completedAt,
+    });
+  });
+
+  it('the event times match the trip the REST API returns', async () => {
+    const driver = await onlineDriver();
+    const passenger = await connectedPassenger();
+    const tripId = await book(passenger);
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+
+    const arrived = nextEvent(passenger.socket, 'trip:arrived');
+    const res = await post(driver.token, `/api/trips/${tripId}/arrive`).expect(200);
+    expect((await arrived).at).toBe(res.body.data.arrivedAt);
+  });
+
+  it('only the Passenger on the trip is told', async () => {
+    const driver = await onlineDriver();
+    const passenger = await connectedPassenger();
+    const bystander = await connectedPassenger();
+    const tripId = await book(passenger);
+
+    const checks = [noEvent(bystander.socket, 'trip:accepted'), noEvent(driver.socket, 'trip:accepted')];
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+    await Promise.all(checks);
+  });
+
+  it('a failed step sends nothing', async () => {
+    const driver = await onlineDriver();
+    const passenger = await connectedPassenger();
+    const tripId = await book(passenger);
+    await post(driver.token, `/api/trips/${tripId}/accept`).expect(200);
+
+    const nothing = noEvent(passenger.socket, 'trip:started');
+    await post(driver.token, `/api/trips/${tripId}/start`).expect(409);
+    await nothing;
+  });
+});

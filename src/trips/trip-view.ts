@@ -123,7 +123,8 @@ function summary(user: User, signPhotoUrl: PhotoUrlSigner): PassengerSummaryResp
   };
 }
 
-function driverSummary(user: User, signPhotoUrl: PhotoUrlSigner): DriverSummaryResponse {
+/** Spec: `DriverSummary`, for a Driver user with `driverDetails` loaded. */
+export function driverSummary(user: User, signPhotoUrl: PhotoUrlSigner): DriverSummaryResponse {
   const d = required(user.driverDetails, 'driver details', { id: user.id });
   return {
     ...summary(user, signPhotoUrl),
