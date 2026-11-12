@@ -121,6 +121,15 @@ export class DriverTripsService {
   }
 
   /**
+   * IN_PROGRESS -> COMPLETED: the Passenger is at the destination. The trip
+   * stops being active, so the Driver can accept new requests and the
+   * Passenger can book again.
+   */
+  complete(caller: AuthUser, tripId: string): Promise<TripResponse> {
+    return this.advance(caller, tripId, TripStatus.IN_PROGRESS, TripStatus.COMPLETED, 'completedAt');
+  }
+
+  /**
    * Moves the caller's own trip one step along the status flow and stamps the
    * time. A conditional UPDATE, so a step cannot be skipped or repeated even
    * when requests overlap. A trip the Driver is not on gets 404; one in the

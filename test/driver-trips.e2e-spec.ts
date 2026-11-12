@@ -568,3 +568,98 @@ describe('POST /api/trips/:tripId/start', () => {
     await ctx.http().post(`/api/trips/${tripId}/start`).expect(401);
   });
 });
+
+// ------------------------------------------------------------------ completeTrip
+describe('POST /api/trips/:tripId/complete', () => {
+  const complete = (token: string, id: string) =>
+    ctx.http().post(`/api/trips/${id}/complete`).set(bearer(token));
+
+  it('200: IN_PROGRESS -> COMPLETED with completedAt and the fare', async () => {
+    const { driver, passenger, tripId } = await driverTripIn('IN_PROGRESS');
+    const res = await complete(driver.token, tripId).expect(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      message: 'Trip completed',
+      data: {
+        id: tripId,
+        status: 'COMPLETED',
+        completedAt: expect.any(String),
+        fare: { amount: 8, currency: 'CAD' },
+        passenger: { id: passenger.user.id },
+      },
+    });
+  });
+
+  it('frees both: no active trip, the Driver can accept and the Passenger can book again', async () => {
+    const { driver, passenger, tripId } = await driverTripIn('IN_PROGRESS');
+    await complete(driver.token, tripId).expect(200);
+
+    for (const user of [driver, passenger]) {
+      const { body } = await ctx.http().get('/api/trips/active').set(bearer(user.token)).expect(200);
+      expect(body.data).toBeNull();
+    }
+    const next = await book(ST_FX);
+    await ctx.http().post(`/api/trips/${next.tripId}/accept`).set(bearer(driver.token)).expect(200);
+    await ctx
+      .http()
+      .post('/api/trips')
+      .set(bearer(passenger.token))
+      .send({ origin: TOWN_CENTRE, destination: ST_FX })
+      .expect(201);
+  });
+
+  it('the completed trip is in both histories, with the Driver still seeing the Passenger', async () => {
+    const { driver, passenger, tripId } = await driverTripIn('IN_PROGRESS');
+    await complete(driver.token, tripId).expect(200);
+
+    const forDriver = await ctx.http().get('/api/trips?status=COMPLETED').set(bearer(driver.token)).expect(200);
+    const forPassenger = await ctx.http().get('/api/trips?status=COMPLETED').set(bearer(passenger.token)).expect(200);
+    expect(forDriver.body.data.items[0]).toMatchObject({ id: tripId, passenger: { id: passenger.user.id } });
+    expect(forPassenger.body.data.items[0]).toMatchObject({ id: tripId, driver: { id: driver.user.id } });
+  });
+
+  it.each(['ACCEPTED', 'DRIVER_ARRIVED', 'COMPLETED'])('409: trip is %s', async (status) => {
+    const { driver, tripId } = await driverTripIn(status);
+    expect((await complete(driver.token, tripId).expect(409)).body).toEqual(INVALID_TRANSITION);
+  });
+
+  it("404: another Driver's trip", async () => {
+    const { tripId } = await driverTripIn('IN_PROGRESS');
+    const other = await signUpDriver(ctx);
+    await complete(other.token, tripId).expect(404);
+  });
+
+  it('403: the Passenger cannot complete the trip', async () => {
+    const { passenger, tripId } = await driverTripIn('IN_PROGRESS');
+    expect((await complete(passenger.token, tripId).expect(403)).body).toEqual(FORBIDDEN);
+  });
+
+  it('401: no token', async () => {
+    const { tripId } = await driverTripIn('IN_PROGRESS');
+    await ctx.http().post(`/api/trips/${tripId}/complete`).expect(401);
+  });
+});
+
+// ------------------------------------------------------------------ full flow
+describe('a whole trip through the API', () => {
+  it('book -> list -> accept -> arrive -> start -> complete, with every timestamp', async () => {
+    const driver = await signUpDriver(ctx);
+    const { passenger, tripId } = await book();
+    const as = (token: string) => bearer(token);
+
+    const requests = await ctx.http().get(`/api/trips/requests${DRIVER_AT_TOWN_CENTRE}`).set(as(driver.token));
+    expect(requests.body.data[0].tripId).toBe(tripId);
+
+    for (const step of ['accept', 'arrive', 'start', 'complete']) {
+      await ctx.http().post(`/api/trips/${tripId}/${step}`).set(as(driver.token)).expect(200);
+    }
+
+    const { body } = await ctx.http().get(`/api/trips/${tripId}`).set(as(passenger.token)).expect(200);
+    expect(body.data.status).toBe('COMPLETED');
+    const times = ['requestedAt', 'acceptedAt', 'arrivedAt', 'startedAt', 'completedAt'].map((f) =>
+      new Date(body.data[f]).getTime(),
+    );
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+    expect(body.data.cancelledAt).toBeNull();
+  });
+});

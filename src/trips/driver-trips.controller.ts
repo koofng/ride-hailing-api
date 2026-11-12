@@ -59,4 +59,12 @@ export class DriverTripsController {
   startTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
     return this.driverTrips.start(caller, tripId);
   }
+
+  /** operationId: completeTrip */
+  @Post(':tripId/complete')
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Trip completed')
+  completeTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
+    return this.driverTrips.complete(caller, tripId);
+  }
 }
