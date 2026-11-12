@@ -8,7 +8,7 @@ import { DriversService } from '../drivers/drivers.service.js';
 import { StorageService } from '../storage/storage.service.js';
 import { TripDecline } from './entities/trip-decline.entity.js';
 import { Trip } from './entities/trip.entity.js';
-import type { Point } from './pricing.js';
+import type { Point } from '../fares/pricing.js';
 import { ACTIVE_STATUSES, TripStatus } from './trip.enums.js';
 import { TripExpiryService } from './trip-expiry.service.js';
 import { toTripRequest, type TripRequestResponse } from './trip-request-view.js';

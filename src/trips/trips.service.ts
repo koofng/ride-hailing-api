@@ -15,7 +15,7 @@ import type { CancelTripDto } from './dto/cancel-trip.dto.js';
 import type { CreateTripDto } from './dto/create-trip.dto.js';
 import type { ListTripsQuery } from './dto/list-trips.query.js';
 import { Trip } from './entities/trip.entity.js';
-import { FIXED_FARE, isWithinServiceArea } from './pricing.js';
+import { FaresService } from '../fares/fares.service.js';
 import { ACTIVE_STATUSES, CancelReason, TripStatus } from './trip.enums.js';
 import { toTripView, WITH_PEOPLE, type TripResponse } from './trip-view.js';
 
@@ -45,10 +45,12 @@ export class TripsService {
   constructor(
     @InjectRepository(Trip) private readonly trips: Repository<Trip>,
     private readonly storage: StorageService,
+    private readonly fares: FaresService,
   ) {}
 
   async create(caller: AuthUser, dto: CreateTripDto): Promise<TripResponse> {
-    if (!isWithinServiceArea(dto.origin) || !isWithinServiceArea(dto.destination)) {
+    const quote = this.fares.quote(dto.origin, dto.destination);
+    if (!quote.withinServiceArea) {
       throw new UnprocessableEntityException(OUTSIDE_SERVICE_AREA);
     }
     if (await this.hasActiveTrip(caller.id)) {
@@ -67,8 +69,8 @@ export class TripsService {
           destinationLat: dto.destination.lat,
           destinationLng: dto.destination.lng,
           destinationAddress: dto.destination.address ?? null,
-          fareAmount: FIXED_FARE.amount,
-          fareCurrency: FIXED_FARE.currency,
+          fareAmount: quote.fare.amount,
+          fareCurrency: quote.fare.currency,
         }),
       ));
     } catch (error) {

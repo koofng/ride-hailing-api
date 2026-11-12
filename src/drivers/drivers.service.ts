@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import type { AuthUser } from '../auth/token.service.js';
 import { Trip } from '../trips/entities/trip.entity.js';
-import { distanceKm, type Point } from '../trips/pricing.js';
+import { distanceKm, type Point } from '../fares/pricing.js';
 import { ACTIVE_STATUSES } from '../trips/trip.enums.js';
 import { DriverDetails } from '../users/entities/driver-details.entity.js';
 import { UsersService } from '../users/users.service.js';
