@@ -20,7 +20,9 @@ export class StorePhotoKeyInsteadOfUrl1794528000000 implements MigrationInterfac
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    const baseUrl = (process.env.PUBLIC_BASE_URL ?? 'http://localhost:3000').replace(/\/+$/, '');
+    const baseUrl = (
+      process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 3000}`
+    ).replace(/\/+$/, '');
     await queryRunner.query(`ALTER TABLE "users" ADD "photo_url" text`);
     await queryRunner.query(
       `

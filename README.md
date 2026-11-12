@@ -24,7 +24,7 @@ Requires Docker. Node 24 is needed only to run outside Docker or to run tests.
 
 ```bash
 cp .env.example .env          # then set JWT_SECRET (openssl rand -base64 48)
-docker compose up -d --build  # API on http://localhost:3000/api, Postgres on localhost:5433
+docker compose up -d --build  # API on http://localhost:$PORT/api (default 3000), Postgres on localhost:5433
 ```
 
 Migrations run automatically when the API starts.
@@ -95,7 +95,8 @@ test/                                    e2e tests (Vitest + Supertest)
 - **Profile photos.** The database stores the storage key, not a URL. Each
   profile or auth response carries a fresh `photoUrl` signed with HMAC-SHA256
   (key derived from `JWT_SECRET`) that expires after 1-2x
-  `FILE_URL_TTL_SECONDS` (default 900). The expiry is rounded to a window so
+  `FILE_URL_TTL_SECONDS` (default 900). Links point at `PUBLIC_BASE_URL`,
+  which defaults to `http://localhost:<PORT>`. The expiry is rounded to a window so
   the URL stays the same for a while and clients can cache the image. Bad,
   expired and unknown links all get the same 403, so the endpoint does not
   reveal which photos exist. Replacing a photo deletes the old file, so its
