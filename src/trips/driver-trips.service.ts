@@ -20,6 +20,8 @@ const MAX_REQUESTS = 50;
 export const NO_LONGER_AVAILABLE = 'This trip is no longer available';
 export const DRIVER_BUSY = 'Complete your current trip before accepting a new one';
 
+export const INVALID_TRANSITION = "This action is not allowed in the trip's current status";
+
 /** SQL condition: the trip in `tripColumn` was not declined by :driverId. */
 const notDeclinedBy = (tripColumn: string) =>
   `NOT EXISTS (SELECT 1 FROM trip_declines d WHERE d.trip_id = ${tripColumn} AND d.driver_id = :driverId)`;
@@ -106,6 +108,46 @@ export class DriverTripsService {
       .values({ tripId, driverId: caller.id })
       .orIgnore()
       .execute();
+  }
+
+  /** ACCEPTED -> DRIVER_ARRIVED: the Driver is at the pickup. */
+  markArrived(caller: AuthUser, tripId: string): Promise<TripResponse> {
+    return this.advance(caller, tripId, TripStatus.ACCEPTED, TripStatus.DRIVER_ARRIVED, 'arrivedAt');
+  }
+
+  /**
+   * Moves the caller's own trip one step along the status flow and stamps the
+   * time. A conditional UPDATE, so a step cannot be skipped or repeated even
+   * when requests overlap. A trip the Driver is not on gets 404; one in the
+   * wrong status gets 409.
+   */
+  private async advance(
+    caller: AuthUser,
+    tripId: string,
+    from: TripStatus,
+    to: TripStatus,
+    stamp: 'arrivedAt' | 'startedAt' | 'completedAt',
+  ): Promise<TripResponse> {
+    if (!isUUID(tripId)) throw new NotFoundException(TRIP_NOT_FOUND);
+
+    const { affected } = await this.trips
+      .createQueryBuilder()
+      .update(Trip)
+      .set({ status: to, [stamp]: () => 'now()' })
+      .where('id = :tripId AND driver_id = :driverId AND status = :from', {
+        tripId,
+        driverId: caller.id,
+        from,
+      })
+      .execute();
+
+    if (!affected) {
+      if (!(await this.trips.exists({ where: { id: tripId, driverId: caller.id } }))) {
+        throw new NotFoundException(TRIP_NOT_FOUND);
+      }
+      throw new ConflictException(INVALID_TRANSITION);
+    }
+    return this.view(tripId, caller);
   }
 
   private async view(tripId: string, caller: AuthUser): Promise<TripResponse> {

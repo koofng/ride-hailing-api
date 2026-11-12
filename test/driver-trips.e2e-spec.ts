@@ -443,3 +443,83 @@ describe('POST /api/trips/:tripId/decline', () => {
     await ctx.http().post(`/api/trips/${tripId}/decline`).expect(401);
   });
 });
+
+// ------------------------------------------------------------------ status steps
+const INVALID_TRANSITION = {
+  success: false,
+  message: "This action is not allowed in the trip's current status",
+  error: { statusCode: 409, status: 'Conflict' },
+};
+
+/** A Passenger's trip that `driver` has accepted and moved to `status`. */
+const driverTripIn = async (status: string) => {
+  const driver = await signUpDriver(ctx);
+  const { passenger, tripId } = await book();
+  await ctx.http().post(`/api/trips/${tripId}/accept`).set(bearer(driver.token)).expect(200);
+  if (status !== 'ACCEPTED') {
+    await setTrip(tripId, `status = $2::text::trip_status, arrived_at = now(),
+      started_at = CASE WHEN $2::text IN ('IN_PROGRESS', 'COMPLETED') THEN now() END,
+      completed_at = CASE WHEN $2::text = 'COMPLETED' THEN now() END`, [status]);
+  }
+  return { driver, passenger, tripId };
+};
+
+// ------------------------------------------------------------------ markArrived
+describe('POST /api/trips/:tripId/arrive', () => {
+  const arrive = (token: string, id: string) =>
+    ctx.http().post(`/api/trips/${id}/arrive`).set(bearer(token));
+
+  it('200: ACCEPTED -> DRIVER_ARRIVED with arrivedAt', async () => {
+    const { driver, tripId } = await driverTripIn('ACCEPTED');
+    const res = await arrive(driver.token, tripId).expect(200);
+    expect(res.body).toMatchObject({
+      success: true,
+      message: 'Arrival at the pickup recorded',
+      data: { id: tripId, status: 'DRIVER_ARRIVED', arrivedAt: expect.any(String), startedAt: null },
+    });
+    expect(res.body.data.passenger).not.toBeNull();
+  });
+
+  it('the Passenger sees the Driver has arrived', async () => {
+    const { driver, passenger, tripId } = await driverTripIn('ACCEPTED');
+    await arrive(driver.token, tripId).expect(200);
+    const { body } = await ctx.http().get('/api/trips/active').set(bearer(passenger.token)).expect(200);
+    expect(body.data).toMatchObject({ status: 'DRIVER_ARRIVED', arrivedAt: expect.any(String) });
+  });
+
+  it.each(['DRIVER_ARRIVED', 'IN_PROGRESS', 'COMPLETED'])('409: trip is already %s', async (status) => {
+    const { driver, tripId } = await driverTripIn(status);
+    expect((await arrive(driver.token, tripId).expect(409)).body).toEqual(INVALID_TRANSITION);
+    const [row] = await ctx.db.query('SELECT status FROM trips');
+    expect(row.status).toBe(status);
+  });
+
+  it('two arrive requests at once: one succeeds, one gets 409', async () => {
+    const { driver, tripId } = await driverTripIn('ACCEPTED');
+    const results = await Promise.all([arrive(driver.token, tripId), arrive(driver.token, tripId)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409]);
+  });
+
+  it("404: a trip that is not this Driver's (open request or another Driver's)", async () => {
+    const { tripId } = await driverTripIn('ACCEPTED');
+    const other = await signUpDriver(ctx);
+    const open = await book(ST_FX);
+    expect((await arrive(other.token, tripId).expect(404)).body.message).toBe('Trip not found');
+    await arrive(other.token, open.tripId).expect(404);
+  });
+
+  it('404: malformed id', async () => {
+    const driver = await signUpDriver(ctx);
+    await arrive(driver.token, 'not-a-uuid').expect(404);
+  });
+
+  it('403: the Passenger cannot mark arrival', async () => {
+    const { passenger, tripId } = await driverTripIn('ACCEPTED');
+    expect((await arrive(passenger.token, tripId).expect(403)).body).toEqual(FORBIDDEN);
+  });
+
+  it('401: no token', async () => {
+    const { tripId } = await driverTripIn('ACCEPTED');
+    await ctx.http().post(`/api/trips/${tripId}/arrive`).expect(401);
+  });
+});

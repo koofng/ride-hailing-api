@@ -43,4 +43,12 @@ export class DriverTripsController {
   declineTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<void> {
     return this.driverTrips.decline(caller, tripId);
   }
+
+  /** operationId: markArrived */
+  @Post(':tripId/arrive')
+  @HttpCode(HttpStatus.OK)
+  @ResponseMessage('Arrival at the pickup recorded')
+  markArrived(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
+    return this.driverTrips.markArrived(caller, tripId);
+  }
 }
