@@ -10,6 +10,7 @@ import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { RevokedToken } from './entities/revoked-token.entity.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
+import { RolesGuard } from './roles.guard.js';
 import { TokenService } from './token.service.js';
 
 @Module({
@@ -29,8 +30,10 @@ import { TokenService } from './token.service.js';
   providers: [
     AuthService,
     TokenService,
-    // Every route requires a JWT unless marked @Public().
+    // Every route requires a JWT unless marked @Public(). Global guards run
+    // in this order, so RolesGuard always sees the authenticated user.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
   ],
 })
 export class AuthModule {}
