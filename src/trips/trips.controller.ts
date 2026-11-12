@@ -41,7 +41,10 @@ export class TripsController {
   /** operationId: getTrip */
   @Get(':tripId')
   @ResponseMessage('Trip retrieved successfully')
-  getTrip(@CurrentUser() caller: AuthUser, @Param('tripId') tripId: string): Promise<TripResponse> {
+  getTripDetails(
+    @CurrentUser() caller: AuthUser,
+    @Param('tripId') tripId: string,
+  ): Promise<TripResponse> {
     return this.trips.findOne(caller, tripId);
   }
 
