@@ -25,6 +25,9 @@ export default defineConfig({
       BCRYPT_ROUNDS: '4',
       UPLOAD_DIR: join(tmpdir(), 'ride-hailing-e2e-uploads'),
       PUBLIC_BASE_URL: 'http://localhost:3000',
+      TRIP_REQUEST_TTL_SECONDS: '120',
+      // Tests run the expiry check themselves, so a timer cannot change their data.
+      TRIP_EXPIRY_SWEEP_SECONDS: '0',
     },
   },
 });

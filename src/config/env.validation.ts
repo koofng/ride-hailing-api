@@ -16,6 +16,8 @@ export interface AppEnv {
   UPLOAD_DIR: string;
   PUBLIC_BASE_URL: string;
   FILE_URL_TTL_SECONDS: number;
+  TRIP_REQUEST_TTL_SECONDS: number;
+  TRIP_EXPIRY_SWEEP_SECONDS: number;
 }
 
 export function validateEnv(raw: Record<string, unknown>): AppEnv {
@@ -58,6 +60,8 @@ export function validateEnv(raw: Record<string, unknown>): AppEnv {
     // at a different address (a domain, a proxy or a mapped Docker port).
     PUBLIC_BASE_URL: str('PUBLIC_BASE_URL', `http://localhost:${port}`).replace(/\/+$/, ''),
     FILE_URL_TTL_SECONDS: int('FILE_URL_TTL_SECONDS', 900, 60, 86_400),
+    TRIP_REQUEST_TTL_SECONDS: int('TRIP_REQUEST_TTL_SECONDS', 120, 30, 3600),
+    TRIP_EXPIRY_SWEEP_SECONDS: int('TRIP_EXPIRY_SWEEP_SECONDS', 10, 0, 300),
   };
 
   if (env.JWT_SECRET && env.JWT_SECRET.length < 32) {
