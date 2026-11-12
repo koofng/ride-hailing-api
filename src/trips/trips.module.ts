@@ -18,6 +18,6 @@ import { TripsService } from './trips.service.js';
   // matched before TripsController's /trips/:tripId.
   controllers: [DriverTripsController, TripsController],
   providers: [TripsService, DriverTripsService, TripExpiryService, TripEvents],
-  exports: [TripEvents],
+  exports: [TripEvents, TripExpiryService],
 })
 export class TripsModule {}

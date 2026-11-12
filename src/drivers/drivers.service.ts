@@ -80,9 +80,7 @@ export class DriversService {
     // A bounding box narrows the rows in SQL; the exact distance is checked below.
     const latDelta = radiusKm / 111;
     const lngDelta = radiusKm / (111 * Math.cos((center.lat * Math.PI) / 180));
-    const online = await this.drivers
-      .createQueryBuilder('d')
-      .where('d.available = true')
+    const online = await this.onlineFreeDrivers()
       .andWhere('d.location_updated_at > now() - make_interval(secs => :maxAge)', {
         maxAge: LOCATION_MAX_AGE_SECONDS,
       })
@@ -94,10 +92,6 @@ export class DriversService {
         minLng: center.lng - lngDelta,
         maxLng: center.lng + lngDelta,
       })
-      .andWhere(
-        'NOT EXISTS (SELECT 1 FROM trips t WHERE t.driver_id = d.user_id AND t.status IN (:...active))',
-        { active: ACTIVE_STATUSES },
-      )
       .getMany();
 
     return online
@@ -110,5 +104,25 @@ export class DriversService {
         location: { lat: d.lastLat!, lng: d.lastLng! },
         lastUpdatedAt: d.locationUpdatedAt!.toISOString(),
       }));
+  }
+
+  /**
+   * Drivers who should be alerted about a new trip request: online and not on
+   * an active trip, with the position they last reported.
+   */
+  async listDispatchCandidates(): Promise<{ driverId: string; at: Point }[]> {
+    const drivers = await this.onlineFreeDrivers().andWhere('d.last_lat IS NOT NULL').getMany();
+    return drivers.map((d) => ({ driverId: d.userId, at: { lat: d.lastLat!, lng: d.lastLng! } }));
+  }
+
+  /** Online Drivers who are not on an active trip. */
+  private onlineFreeDrivers() {
+    return this.drivers
+      .createQueryBuilder('d')
+      .where('d.available = true')
+      .andWhere(
+        'NOT EXISTS (SELECT 1 FROM trips t WHERE t.driver_id = d.user_id AND t.status IN (:...active))',
+        { active: ACTIVE_STATUSES },
+      );
   }
 }
