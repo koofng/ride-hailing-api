@@ -15,11 +15,8 @@ import type { AuthResponse } from './dto/auth-response.js';
 import { LoginDto } from './dto/login.dto.js';
 import { LogoutDto } from './dto/logout.dto.js';
 import { PassengerRegistrationDto } from './dto/registration.dto.js';
-import {
-  MAX_UPLOAD_BYTES,
-  validateDriverRegistration,
-  type DriverUploads,
-} from './driver-registration.validator.js';
+import { MAX_UPLOAD_BYTES } from '../storage/upload-validation.js';
+import { validateDriverRegistration, type DriverUploads } from './driver-registration.validator.js';
 import { CurrentUser } from './jwt-auth.guard.js';
 import type { AuthUser } from './token.service.js';
 
