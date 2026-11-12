@@ -13,7 +13,10 @@ export interface NewUser {
   photoKey?: string | null;
 }
 
-export type NewDriverDetails = Omit<DriverDetails, 'userId' | 'user' | 'available'>;
+export type NewDriverDetails = Omit<
+  DriverDetails,
+  'userId' | 'user' | 'available' | 'lastLat' | 'lastLng' | 'locationUpdatedAt'
+>;
 
 @Injectable()
 export class UsersService {
@@ -75,7 +78,11 @@ export class UsersService {
     await this.users.update({ id: userId }, { photoKey });
   }
 
+  /** Going offline also forgets the Driver's position, so offline Drivers are not tracked. */
   async setDriverAvailability(userId: string, available: boolean): Promise<void> {
-    await this.driverDetails.update({ userId }, { available });
+    await this.driverDetails.update(
+      { userId },
+      available ? { available } : { available, lastLat: null, lastLng: null, locationUpdatedAt: null },
+    );
   }
 }
