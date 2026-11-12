@@ -29,12 +29,15 @@ export interface UserProfileResponse {
   driverDetails: DriverDetailsResponse | null;
 }
 
+/** Turns a stored photo key into a URL the client can load (a signed link). */
+export type PhotoUrlSigner = (key: string) => string;
+
 /**
  * Maps a user (with `driverDetails` loaded) to the spec's `UserProfile`.
  * Enforces the spec rule: `driverDetails` is always present for Drivers and
  * always null for Passengers.
  */
-export function toUserProfile(user: User): UserProfileResponse {
+export function toUserProfile(user: User, signPhotoUrl: PhotoUrlSigner): UserProfileResponse {
   let driverDetails: DriverDetailsResponse | null = null;
 
   if (user.role === Role.DRIVER) {
@@ -62,7 +65,7 @@ export function toUserProfile(user: User): UserProfileResponse {
     fullName: user.fullName,
     email: user.email,
     phone: user.phone,
-    photoUrl: user.photoUrl ?? null,
+    photoUrl: user.photoKey ? signPhotoUrl(user.photoKey) : null,
     createdAt: user.createdAt.toISOString(),
     driverDetails,
   };

@@ -10,7 +10,7 @@ export interface NewUser {
   email: string;
   phone: string;
   passwordHash: string;
-  photoUrl?: string | null;
+  photoKey?: string | null;
 }
 
 export type NewDriverDetails = Omit<DriverDetails, 'userId' | 'user' | 'available'>;
@@ -48,7 +48,7 @@ export class UsersService {
 
   async createPassenger(data: NewUser): Promise<User> {
     const user = await this.users.save(
-      this.users.create({ ...data, role: Role.PASSENGER, photoUrl: data.photoUrl ?? null }),
+      this.users.create({ ...data, role: Role.PASSENGER, photoKey: data.photoKey ?? null }),
     );
     user.driverDetails = null;
     return user;
@@ -58,13 +58,21 @@ export class UsersService {
   async createDriver(data: NewUser, details: NewDriverDetails): Promise<User> {
     return this.dataSource.transaction(async (manager) => {
       const user = await manager.save(
-        manager.create(User, { ...data, role: Role.DRIVER, photoUrl: data.photoUrl ?? null }),
+        manager.create(User, { ...data, role: Role.DRIVER, photoKey: data.photoKey ?? null }),
       );
       user.driverDetails = await manager.save(
         manager.create(DriverDetails, { ...details, userId: user.id, available: false }),
       );
       return user;
     });
+  }
+
+  async updateFullName(userId: string, fullName: string): Promise<void> {
+    await this.users.update({ id: userId }, { fullName });
+  }
+
+  async updatePhotoKey(userId: string, photoKey: string): Promise<void> {
+    await this.users.update({ id: userId }, { photoKey });
   }
 
   async setDriverAvailability(userId: string, available: boolean): Promise<void> {

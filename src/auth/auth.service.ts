@@ -94,7 +94,7 @@ export class AuthService implements OnModuleInit {
             email: fields.email,
             phone: fields.phone,
             passwordHash,
-            photoUrl: this.storage.publicUrl(photoKey),
+            photoKey,
           },
           {
             licenceNumber: fields.licenceNumber,
@@ -143,7 +143,7 @@ export class AuthService implements OnModuleInit {
       accessToken: await this.tokens.issue(user.id, user.role),
       tokenType: 'Bearer',
       expiresIn: this.tokens.expiresInSeconds,
-      user: toUserProfile(user),
+      user: toUserProfile(user, (key) => this.storage.signedPhotoUrl(key)),
     };
   }
 

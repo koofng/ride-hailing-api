@@ -358,6 +358,57 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /files/photos/{name}:
+    get:
+      tags: [Profile]
+      operationId: getPhoto
+      summary: Download a profile photo through a signed link
+      description: |
+        Clients do not build this URL: they use `photoUrl` from a `UserProfile` as-is.
+        No token is needed because the signature is the authorisation. Uploaded files
+        are never served any other way, and driver documents are never served at all.
+      security: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: expires
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: sig
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The image
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: The link is invalid, expired, or the photo no longer exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                message: This link is invalid or has expired
+                error:
+                  statusCode: 403
+                  status: Forbidden
+
   # ---------------------------------------------------------------- Drivers
   /drivers/me/availability:
     patch:
@@ -1273,6 +1324,11 @@ components:
           type: string
           format: uri
           nullable: true
+          description: |
+            Signed link to the profile photo that works without a token and expires
+            15-30 minutes after it was issued. Do not store it: use the latest one
+            from a profile or auth response. Null if the user has no photo.
+          example: http://localhost:3000/api/files/photos/9a2e4c7d-1b3f-4e8a-a6d2-5c0f8b1e3a77.jpg?expires=1794529800&sig=Hk3vQm0yZ1x2c3v4b5n6m7a8s9d0f1g2h3j4k5l6zXc
         createdAt:
           type: string
           format: date-time

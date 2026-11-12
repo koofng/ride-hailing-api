@@ -39,8 +39,9 @@ export class User {
   @Column({ name: 'password_hash', type: 'varchar', length: 100, select: false })
   passwordHash: string;
 
-  @Column({ name: 'photo_url', type: 'text', nullable: true })
-  photoUrl: string | null;
+  /** Storage key, e.g. `public/photos/<uuid>.jpg`. Exposed only as a signed URL. */
+  @Column({ name: 'photo_key', type: 'text', nullable: true })
+  photoKey: string | null;
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

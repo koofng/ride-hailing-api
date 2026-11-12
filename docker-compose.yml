@@ -32,7 +32,8 @@ services:
       DB_PORT: 5432
       UPLOAD_DIR: /app/uploads
     ports:
-      - '${PORT:-3000}:3000'
+      # Same port on both sides, because the API listens on PORT inside the container.
+      - '${PORT:-3000}:${PORT:-3000}'
     volumes:
       - uploads:/app/uploads
 

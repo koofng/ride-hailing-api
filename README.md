@@ -3,8 +3,9 @@
 NestJS 12 + PostgreSQL 17 + TypeORM backend for the API contract in
 [`ride-hailing-api.yaml`](ride-hailing-api.yaml).
 
-**Status: stage 1.** Project setup, database, the `User` model and the four
-`Auth` endpoints. Every other endpoint in the spec returns 404 for now.
+**Status: stage 2 in progress.** Project setup, database, the `User` model,
+the four `Auth` endpoints and the three `Profile` endpoints. Every other
+endpoint in the spec returns 404 for now.
 
 | Endpoint | Auth | Notes |
 |---|---|---|
@@ -12,6 +13,10 @@ NestJS 12 + PostgreSQL 17 + TypeORM backend for the API contract in
 | `POST /api/auth/register/driver` | public | `multipart/form-data` with `licenceImage`, `insuranceDocument`, `photo` |
 | `POST /api/auth/login` | public | |
 | `POST /api/auth/logout` | Bearer JWT | 200 |
+| `GET /api/users/me` | Bearer JWT | |
+| `PATCH /api/users/me` | Bearer JWT | JSON body, `fullName` only |
+| `PUT /api/users/me/photo` | Bearer JWT | `multipart/form-data` with `photo` |
+| `GET /api/files/photos/:name` | signed link | the `photoUrl` from a profile; not built by clients |
 
 ## Running it
 
@@ -19,7 +24,7 @@ Requires Docker. Node 24 is needed only to run outside Docker or to run tests.
 
 ```bash
 cp .env.example .env          # then set JWT_SECRET (openssl rand -base64 48)
-docker compose up -d --build  # API on http://localhost:3000/api, Postgres on localhost:5433
+docker compose up -d --build  # API on http://localhost:$PORT/api (default 3000), Postgres on localhost:5433
 ```
 
 Migrations run automatically when the API starts.
@@ -84,9 +89,18 @@ test/                                    e2e tests (Vitest + Supertest)
 - **Passwords.** Hashed with bcrypt (cost 12 by default). Login takes the same
   time whether or not the email exists.
 - **Uploads.** File types are checked from the file's bytes, not its
-  Content-Type header. The limit is 5 MB per file. Profile photos are served
-  at `/uploads/photos/…`. Licence and insurance documents are stored
-  privately and are never served.
+  Content-Type header. The limit is 5 MB per file. Nothing in `UPLOAD_DIR` is
+  served as a static file. Licence and insurance documents are never served
+  at all.
+- **Profile photos.** The database stores the storage key, not a URL. Each
+  profile or auth response carries a fresh `photoUrl` signed with HMAC-SHA256
+  (key derived from `JWT_SECRET`) that expires after 1-2x
+  `FILE_URL_TTL_SECONDS` (default 900). Links point at `PUBLIC_BASE_URL`,
+  which defaults to `http://localhost:<PORT>`. The expiry is rounded to a window so
+  the URL stays the same for a while and clients can cache the image. Bad,
+  expired and unknown links all get the same 403, so the endpoint does not
+  reveal which photos exist. Replacing a photo deletes the old file, so its
+  old links stop working.
 - **Normalisation.** Email is stored in lower case, and plate numbers in upper
   case with spaces collapsed, so duplicates are caught regardless of case.
 
