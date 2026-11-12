@@ -1,0 +1,32 @@
+import type { DataSourceOptions } from 'typeorm';
+import { RevokedToken } from '../auth/entities/revoked-token.entity.js';
+import type { AppEnv } from '../config/env.validation.js';
+import { DriverDetails } from '../users/entities/driver-details.entity.js';
+import { User } from '../users/entities/user.entity.js';
+import { CreateUsersAndAuth1794355200000 } from './migrations/1794355200000-CreateUsersAndAuth.js';
+
+/**
+ * Entities and migrations are listed explicitly (not globbed) so the same
+ * config works from compiled `dist/` and from TypeScript under Vitest.
+ * The schema is managed only by migrations; `synchronize` stays off.
+ */
+export type DbEnv = Pick<AppEnv, 'DB_HOST' | 'DB_PORT' | 'DB_USER' | 'DB_PASSWORD' | 'DB_NAME'>;
+
+export function buildTypeOrmOptions(env: DbEnv): DataSourceOptions {
+  return {
+    type: 'postgres',
+    host: env.DB_HOST,
+    port: env.DB_PORT,
+    username: env.DB_USER,
+    password: env.DB_PASSWORD,
+    database: env.DB_NAME,
+    entities: [User, DriverDetails, RevokedToken],
+    migrations: [CreateUsersAndAuth1794355200000],
+    migrationsRun: true,
+    synchronize: false,
+    // UUIDs come from Postgres's built-in gen_random_uuid() (PG 13+),
+    // so no extension needs installing.
+    uuidExtension: 'pgcrypto',
+    installExtensions: false,
+  };
+}
